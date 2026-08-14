@@ -1,0 +1,31 @@
+# Decisions
+
+Dated, with the why. Supersede — never delete.
+
+## 2026-08-13 — Finder tags, not folders
+
+Green / Red / custom names apply as macOS Finder tags on the current local file. Files stay in place except Delete.
+
+## 2026-08-13 — Floating dialog, not hotkeys
+
+VLC Lua cannot bind global keys. v1 is a panel: Green, Red, Delete, plus tags added at runtime.
+
+## 2026-08-13 — Last click wins
+
+Green, Red, Delete, and custom palette tags are exclusive. Clicking a non-Delete tag cancels a pending delete. Unrelated Finder tags (e.g. Work) are kept.
+
+## 2026-08-13 — Growing palette
+
+Type a name + Add → new button, applied to the current video, persisted in `video-tags-palette.txt`. Remove drops a custom name from the palette only.
+
+## 2026-08-13 — Delete is deferred
+
+Delete does not tag. Trash runs when a different local file starts, or when playback stops near the end. Mid-video Stop must not trash. Quit / deactivate with a pending delete leaves the file in place.
+
+## 2026-08-13 — No file-scope os/io
+
+VLC scans extensions in a bare `luaL_newstate()` (no stdlibs). File-scope `os.getenv` hid the menu item. Paths resolve on activate via `vlc.config.userdatadir()`.
+
+## 2026-08-13 — macOS VLC 3, local files only
+
+No Windows/Linux, no URL/stream tagging, no auto-start. Enable once per session: **VLC → Extensions → Video Tags**.
