@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 Glen Pridgen
 # Behavior tests for scripts/finder_ops.applescript (real Finder tags + Trash).
 set -euo pipefail
 

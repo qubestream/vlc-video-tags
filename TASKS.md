@@ -1,4 +1,4 @@
-# TASKS — vlc-video-tags
+# TASKS — VLC-Video-Tags
 
 ## Done
 
@@ -7,6 +7,7 @@
 - [x] 2026-08-13 — Finder helper `scripts/finder_ops.applescript` (set-tag last-wins, preserve unrelated tags, trash). Tests: `tests/test_finder_ops.sh`, shape scan, URI rules.
 - [x] 2026-08-13 — Menu-item load bug: no file-scope `os`/`io`. Glen confirmed it works in VLC 3.0.23.
 - [x] 2026-08-13 — Private GitHub `qubestream/vlc-video-tags`, `main` @ `b07e5b4`.
+- [x] 2026-08-13 — Public 1.0: project title VLC-Video-Tags, GPL-2.0-or-later, install README. GitHub slug unchanged. VLC menu still **Video Tags**.
 
 ## Open
 

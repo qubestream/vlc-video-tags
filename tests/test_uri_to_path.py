@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""URI → POSIX path rules used by lua/extensions/video_tags.lua."""
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 Glen Pridgen
+"""URI to POSIX path rules used by lua/extensions/video_tags.lua."""
 
 import re
 import unittest

@@ -1,5 +1,7 @@
 #!/bin/bash
-# Install the Video Tags extension for this user on macOS.
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 Glen Pridgen
+# Install the VLC-Video-Tags extension for this user on macOS.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -10,7 +12,7 @@ mkdir -p "$EXT"
 cp "$ROOT/lua/extensions/video_tags.lua" "${EXT}/video_tags.lua"
 cp "$ROOT/scripts/finder_ops.applescript" "${SUPPORT}/video-tags-finder_ops.applescript"
 
-echo "Installed Video Tags to:"
+echo "Installed VLC-Video-Tags to:"
 echo "  ${EXT}/video_tags.lua"
 echo "  ${SUPPORT}/video-tags-finder_ops.applescript"
 echo

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 Glen Pridgen
 # Sanity-check that the VLC extension defines the hooks the plan relies on.
 set -euo pipefail
 

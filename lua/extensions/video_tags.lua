@@ -1,4 +1,13 @@
--- Video Tags: tag the current local file from a floating VLC dialog.
+-- SPDX-License-Identifier: GPL-2.0-or-later
+--
+-- VLC-Video-Tags: tag the current local file from a floating VLC dialog.
+-- Copyright (C) 2026 Glen Pridgen
+--
+-- This program is free software; you can redistribute it and/or modify
+-- it under the terms of the GNU General Public License as published by
+-- the Free Software Foundation; either version 2 of the License, or
+-- (at your option) any later version.
+--
 -- Green / Red / custom names become macOS Finder tags (last click wins).
 -- Delete moves the file to Trash after skip or when the video ends.
 
@@ -26,8 +35,9 @@ rebuilding = false
 function descriptor()
     return {
         title = "Video Tags",
-        version = "0.1",
+        version = "1.0",
         author = "Glen Pridgen",
+        url = "https://github.com/qubestream/vlc-video-tags",
         shortdesc = "Tag videos with Finder tags or send them to Trash",
         description = "Floating palette: Green, Red, Delete, plus tags you add. "
             .. "One tag per video. Delete trashes the file when you skip or the video ends.",
@@ -326,7 +336,7 @@ function finder_run(cmd, ...)
         return false, "Could not resolve VLC data directory"
     end
     if not file_exists(FINDER_SCRIPT) then
-        return false, "Finder helper missing — run install.sh"
+        return false, "Finder helper missing. Run install.sh"
     end
     local args = { cmd, ... }
     local quoted = { "osascript", shell_quote(FINDER_SCRIPT) }
