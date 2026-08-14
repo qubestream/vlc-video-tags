@@ -8,6 +8,7 @@
 - [x] 2026-08-13 — Menu-item load bug: no file-scope `os`/`io`. Glen confirmed it works in VLC 3.0.23.
 - [x] 2026-08-13 — Private GitHub `qubestream/vlc-video-tags`, `main` @ `b07e5b4`.
 - [x] 2026-08-13 — Public 1.0: project title VLC-Video-Tags, GPL-2.0-or-later, install README. GitHub slug unchanged. VLC menu still **Video Tags**.
+- [x] 2026-08-13 — GitHub Release v1.0: https://github.com/qubestream/vlc-video-tags/releases/tag/v1.0
 
 ## Open
 

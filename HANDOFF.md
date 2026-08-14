@@ -1,22 +1,25 @@
-# HANDOFF — 2026-08-13 (evening)
+# HANDOFF — 2026-08-13 (overnight)
 
 ## What this session shipped
 
-Private **vlc-video-tags** at https://github.com/qubestream/vlc-video-tags. `main` @ `b07e5b4`, pushed.
+Public **VLC-Video-Tags** 1.0 at https://github.com/qubestream/vlc-video-tags. `main` @ `962bb1a`, pushed. GitHub Release: https://github.com/qubestream/vlc-video-tags/releases/tag/v1.0
 
-- Lua extension `lua/extensions/video_tags.lua` + `install.sh` → `~/Library/Application Support/org.videolan.vlc/lua/extensions/`.
-- Finder ops via `scripts/finder_ops.applescript` (same path the installer copies next to VLC user data).
-- Glen verified in real VLC 3.0.23: tagging while playing works.
+- Project title is VLC-Video-Tags. GitHub slug stays `vlc-video-tags`. VLC menu item stays **Video Tags**.
+- GNU GPL v2.0 or later (`LICENSE` plus `GPL-2.0-or-later` headers). GitHub’s license badge shows GNU GPLv2 (the license text); “or later” is in the headers and README.
+- Extension `descriptor().version` is `"1.0"`.
+- Install README: clone or zip, ⌘Q, `./install.sh`, then **VLC → Extensions → Video Tags**.
+- Shape and URI tests passed this session. Finder-ops test was not re-run. VLC GUI was not re-checked after the 1.0 docs/license bump (no behavior change except one error string).
 
-On-disk clone is now `/Users/glenpridgen/Cursor/VLC Extensions/video_tag_lua` (parent folder renamed after the first checkout). Sibling `id_tag_editor` is a **different** repo (`VLC-ID-Tag-Editor`) — do not mix them.
+On-disk clone: `/Users/glenpridgen/Cursor/VLC Extensions/video_tag_lua`. Sibling `id_tag_editor` is a **different** repo (`VLC-ID-Tag-Editor`). Do not mix them.
 
 Enable each VLC launch: **VLC → Extensions → Video Tags** (not View). Fully quit with ⌘Q after Lua updates, then `./install.sh` if you edited the repo.
 
 ## Open threads
 
-- v1 checklist items that were not re-run in the GUI after the scan fix: last-item end → Trash; Delete then Green cancels; mid-video Stop does not trash. Glen said the panel works; those Delete edges are still a watch.
+- Delete edges not re-run in the GUI after the earlier scan fix: last-item end → Trash; Delete then Green cancels; mid-video Stop does not trash. Glen said the panel works (prior session); those Delete edges are still a watch.
 - No hotkeys (VLC Lua cannot bind them).
 - Repo lives outside `~/Development` (breaks glen-hq “one dev root”). Leave it unless Glen asks to move it.
+- Local `archive/` is untracked. Do not commit it unless Glen asks.
 
 ## Decisions made
 
@@ -29,6 +32,8 @@ See [decisions.md](decisions.md):
 - Delete deferred to skip / near-end; not on quit
 - No file-scope os/io (VLC extension scan)
 - macOS VLC 3, local files only
+- Public 1.0 as VLC-Video-Tags, GPL-2.0-or-later; slug and VLC menu name unchanged
+- Publish the GitHub Release for 1.0 (done)
 
 ## Open queue
 
