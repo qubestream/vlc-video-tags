@@ -1360,9 +1360,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
             guard let ctx = NSGraphicsContext.current else { return false }
             let xf = NSAffineTransform()
-            xf.translateX(by: 9, yBy: 9)
+            xf.translateX(by: 8.4, yBy: 9.6)   // optical centre after the tilt
             xf.rotate(byDegrees: -18)
-            xf.scale(by: 0.9)
+            xf.scale(by: 0.86)
             xf.translateX(by: -9, yBy: -9)
             xf.concat()
 
@@ -1380,7 +1380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             tag.stroke()
 
             ctx.compositingOperation = .destinationOut
-            NSBezierPath(ovalIn: NSRect(x: 4.4, y: 7.8, width: 2.4, height: 2.4)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 4.2, y: 7.6, width: 2.8, height: 2.8)).fill()
             let play = NSBezierPath()
             play.move(to: NSPoint(x: 9.6, y: 6.1))
             play.line(to: NSPoint(x: 14.2, y: 9))
