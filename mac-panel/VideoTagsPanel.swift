@@ -394,7 +394,8 @@ enum VLCPrefs {
             lines.append(entry)
             return
         }
-        let trimmed: (Int) -> String = { lines[$0].trimmingCharacters(in: .whitespaces) }
+        let snapshot = lines
+        let trimmed: (Int) -> String = { snapshot[$0].trimmingCharacters(in: .whitespaces) }
         if let i = range.first(where: { trimmed($0).hasPrefix(key + "=") }) {
             lines[i] = entry
         } else if let i = range.first(where: { trimmed($0).hasPrefix("#" + key + "=") }) {
