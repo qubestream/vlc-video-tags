@@ -9,13 +9,17 @@
 -- (at your option) any later version.
 -- Usage:
 --   osascript finder_ops.applescript get-tags <posix-path>
+--   osascript finder_ops.applescript toggle-tag <posix-path> <tag>
+--   osascript finder_ops.applescript add-tag <posix-path> <tag>
 --   osascript finder_ops.applescript set-tag <posix-path> <tag> <palette-csv>
 --   osascript finder_ops.applescript clear-palette-tags <posix-path> <palette-csv>
 --   osascript finder_ops.applescript replace-tags <posix-path> <tags-csv>
 --   osascript finder_ops.applescript trash <posix-path>
 --
 -- palette-csv / tags-csv: comma-separated names, no spaces around commas required.
--- set-tag is last-wins among palette names and keeps tags that are not in the palette.
+-- toggle-tag adds the tag if missing, removes it if present, keeps every other tag,
+-- and prints "on" or "off". add-tag adds it only if missing.
+-- set-tag (1.0, kept for compatibility) is last-wins among palette names.
 
 use framework "Foundation"
 use scripting additions
@@ -26,6 +30,13 @@ on run argv
 	set posixPath to item 2 of argv
 	if cmd is "get-tags" then
 		return joinLines(getTags(posixPath))
+	else if cmd is "toggle-tag" then
+		if (count of argv) < 3 then error "usage: toggle-tag <posix-path> <tag>"
+		return toggleTag(posixPath, item 3 of argv)
+	else if cmd is "add-tag" then
+		if (count of argv) < 3 then error "usage: add-tag <posix-path> <tag>"
+		addTag(posixPath, item 3 of argv)
+		return "on"
 	else if cmd is "set-tag" then
 		if (count of argv) < 4 then error "usage: set-tag <posix-path> <tag> <palette-csv>"
 		setTagKeepingOthers(posixPath, item 3 of argv, splitCSV(item 4 of argv))
@@ -84,6 +95,35 @@ on setTagKeepingOthers(posixPath, selectedTag, palette)
 	set end of kept to trim(selectedTag)
 	setTags(posixPath, kept)
 end setTagKeepingOthers
+
+on toggleTag(posixPath, theTag)
+	set wanted to trim(theTag)
+	set kept to {}
+	set found to false
+	repeat with t in getTags(posixPath)
+		set nameText to t as text
+		if nameText is wanted then
+			set found to true
+		else
+			set end of kept to nameText
+		end if
+	end repeat
+	if found then
+		setTags(posixPath, kept)
+		return "off"
+	end if
+	set end of kept to wanted
+	setTags(posixPath, kept)
+	return "on"
+end toggleTag
+
+on addTag(posixPath, theTag)
+	set wanted to trim(theTag)
+	set current to getTags(posixPath)
+	if listContains(current, wanted) then return
+	set end of current to wanted
+	setTags(posixPath, current)
+end addTag
 
 on clearPaletteTags(posixPath, palette)
 	set kept to {}

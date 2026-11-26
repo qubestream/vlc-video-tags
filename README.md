@@ -1,8 +1,8 @@
 # VLC-Video-Tags
 
-A VLC extension for macOS. While a local video plays, a floating palette lets you stamp a Finder tag on the file, or send it to Trash when you skip or when the video ends.
+A VLC extension for macOS. While a local video plays, a floating palette lets you put one or more Finder tags on the file, or send it to Trash when you skip or when the video ends.
 
-Version **1.0**. Tested on VLC 3.0.23.
+Version **1.1**. Tested on VLC 3.0.23 and 3.0.24.
 
 In VLC the menu item is **Video Tags**. That is the name under **VLC → Extensions**.
 
@@ -47,16 +47,16 @@ The first time you tag a file, macOS may ask whether VLC can control Finder. All
 
 ## Use
 
-- **Green / Red / a custom button** applies that Finder tag to the current file right away. Unrelated Finder tags (for example `Work`) are kept. Other palette tags on the file are replaced. Last click wins.
+- **Green / Red / a custom button** turns that Finder tag on or off for the current file. Click several to give a video several tags. A ✓ on a button means the file has that tag, and the status line lists them. Tags already on a file show when it starts playing. Unrelated Finder tags (for example `Work`) are never touched.
 - **Delete** marks the current file. It moves to Trash when a different video starts, or when this video reaches the end, including the last item in the playlist.
-- **Add** takes the name in the text field, makes a new button, and applies that tag to the current video. Palette names survive VLC restarts.
+- **Add** takes the name in the text field, makes a new button, and adds that tag to the current video. Palette names survive VLC restarts.
 - **Remove** drops a custom name from the palette. Files already tagged are not changed. An empty field removes the last custom tag. Built-in Green / Red / Delete cannot be removed.
 
 If you name a tag after a Finder color (`Orange`, `Blue`, `Purple`, `Yellow`, `Gray`), Finder colors it. Other names are plain tags.
 
 Custom tags live in `~/Library/Application Support/org.videolan.vlc/video-tags-palette.txt`.
 
-Clicking Green, Red, or a custom tag cancels a pending delete.
+Clicking Green, Red, or a custom tag cancels a pending delete. Delete removes the palette tags from the file.
 
 ## If Video Tags is missing from the menu
 
@@ -89,6 +89,7 @@ Copyright (C) 2026 Glen Pridgen.
 ./tests/test_extension_shape.sh
 python3 tests/test_uri_to_path.py
 ./tests/test_finder_ops.sh
+./tests/test_toggle_flow.sh   # needs lua (brew install lua)
 ```
 
-`test_finder_ops.sh` talks to real Finder tags and Trash, so it needs to run outside a sandbox.
+`test_finder_ops.sh` and `test_toggle_flow.sh` talk to real Finder tags and Trash, so it needs to run outside a sandbox.

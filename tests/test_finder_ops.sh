@@ -63,6 +63,18 @@ assert_eq "$(sorted_tags "$FILE")" "Red,Work" "palette tags replaced; Work kept"
 osascript "$SCRIPT" set-tag "$FILE" "Family" "Green,Red,Family"
 assert_eq "$(sorted_tags "$FILE")" "Family,Work" "custom Family replaces Red; Work kept"
 
+# --- toggle-tag stacks tags and turns them off again ---
+osascript "$SCRIPT" replace-tags "$FILE" "Work"
+assert_eq "$(osascript "$SCRIPT" toggle-tag "$FILE" "Green")" "on" "toggle-tag Green reports on"
+osascript "$SCRIPT" toggle-tag "$FILE" "Family" >/dev/null
+assert_eq "$(sorted_tags "$FILE")" "Family,Green,Work" "toggle-tag keeps several tags"
+assert_eq "$(osascript "$SCRIPT" toggle-tag "$FILE" "Green")" "off" "toggle-tag Green again reports off"
+assert_eq "$(sorted_tags "$FILE")" "Family,Work" "toggle-tag off removes only Green"
+
+# --- add-tag never removes ---
+osascript "$SCRIPT" add-tag "$FILE" "Family" >/dev/null
+assert_eq "$(sorted_tags "$FILE")" "Family,Work" "add-tag on an existing tag is a no-op"
+
 # --- clear palette tags (Delete) ---
 osascript "$SCRIPT" clear-palette-tags "$FILE" "Green,Red,Family"
 assert_eq "$(sorted_tags "$FILE")" "Work" "clear-palette-tags removes Family only"
