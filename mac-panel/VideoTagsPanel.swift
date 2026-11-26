@@ -24,6 +24,7 @@
 
 import AppKit
 import Carbon.HIToolbox
+import ServiceManagement
 import SwiftUI
 
 // MARK: - Paths and constants
@@ -1286,6 +1287,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installHotKeys()
         model.start()
         panel.orderFrontRegardless()
+        enableLoginItemOnFirstInstalledLaunch()
+    }
+
+    // MARK: Open at Login (SMAppService, macOS 13+)
+
+    private var isInstalled: Bool {
+        let path = Bundle.main.bundlePath
+        return path.hasPrefix("/Applications/") || path.hasPrefix(NSHomeDirectory() + "/Applications/")
+    }
+
+    /// The first launch from an Applications folder turns on Open at Login once.
+    /// After that the menu toggle is the only thing that changes it.
+    private func enableLoginItemOnFirstInstalledLaunch() {
+        let key = "didSetUpLoginItem"
+        guard isInstalled, !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        try? SMAppService.mainApp.register()
+    }
+
+    @objc private func toggleLoginItem(_ sender: NSMenuItem) {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            NSLog("Video Tags Panel: login item change failed: \(error.localizedDescription)")
+        }
+        sender.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -1332,6 +1363,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())
+        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
+        login.target = self
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(login)
         menu.addItem(withTitle: "Quit Video Tags Panel", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
     }
