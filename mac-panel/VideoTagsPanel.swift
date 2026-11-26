@@ -1353,9 +1353,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Menu-bar template glyph: the app icon's tag with the play button and
+    /// string hole punched out, tilted the same way. Drawn in code so it stays
+    /// crisp at every scale and follows the menu bar's light/dark tint.
+    static func menuBarGlyph() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
+            guard let ctx = NSGraphicsContext.current else { return false }
+            let xf = NSAffineTransform()
+            xf.translateX(by: 9, yBy: 9)
+            xf.rotate(byDegrees: -18)
+            xf.scale(by: 0.9)
+            xf.translateX(by: -9, yBy: -9)
+            xf.concat()
+
+            let tag = NSBezierPath()
+            tag.move(to: NSPoint(x: 1.5, y: 9))
+            tag.line(to: NSPoint(x: 6, y: 4))
+            tag.line(to: NSPoint(x: 16.5, y: 4))
+            tag.line(to: NSPoint(x: 16.5, y: 14))
+            tag.line(to: NSPoint(x: 6, y: 14))
+            tag.close()
+            tag.lineJoinStyle = .round
+            tag.lineWidth = 1.6
+            NSColor.black.set()
+            tag.fill()
+            tag.stroke()
+
+            ctx.compositingOperation = .destinationOut
+            NSBezierPath(ovalIn: NSRect(x: 4.4, y: 7.8, width: 2.4, height: 2.4)).fill()
+            let play = NSBezierPath()
+            play.move(to: NSPoint(x: 9.6, y: 6.1))
+            play.line(to: NSPoint(x: 14.2, y: 9))
+            play.line(to: NSPoint(x: 9.6, y: 11.9))
+            play.close()
+            play.lineJoinStyle = .round
+            play.lineWidth = 1.0
+            play.fill()
+            play.stroke()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Video Tags"
+        return image
+    }
+
     private func installStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "tag", accessibilityDescription: "Video Tags")
+        statusItem.button?.image = Self.menuBarGlyph()
         let menu = NSMenu()
         menu.addItem(withTitle: "Show / Hide Panel", action: #selector(togglePanel), keyEquivalent: "").target = self
         menu.addItem(.separator())

@@ -18,7 +18,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Video Tags Panel"
 EXEC="VideoTagsPanel"
-VERSION="1.3.0"
+VERSION="1.3.1"
 MIN_MACOS="14.0"
 BUNDLE_ID="${BUNDLE_ID:-dev.qubestream.videotags.panel}"
 SIGN_ID="${SIGN_ID:--}"
@@ -60,6 +60,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
   <key>NSHumanReadableCopyright</key><string>Copyright (C) 2026 Glen Pridgen. GPL-2.0-or-later.</string>
@@ -70,6 +72,28 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# App icon. icon/AppIcon.icon is an Icon Composer document: actool (Xcode 26+)
+# compiles it into Assets.car (Liquid Glass, with Dark/Clear/Tinted looks) plus
+# AppIcon.icns for older macOS. Without a new enough actool, fall back to the
+# prebuilt classic icon/AppIcon.icns.
+ICON_SRC="$HERE/icon/AppIcon.icon"
+if xcrun actool "$ICON_SRC" \
+     --compile "$APP/Contents/Resources" \
+     --app-icon AppIcon \
+     --platform macosx --target-device mac \
+     --minimum-deployment-target "$MIN_MACOS" \
+     --output-partial-info-plist "$OUT/obj/icon-partial.plist" \
+     --output-format human-readable-text --notices --warnings --errors \
+     > "$OUT/obj/actool.log" 2>&1 \
+   && [[ -f "$APP/Contents/Resources/Assets.car" ]]; then
+  echo "Icon: compiled Liquid Glass icon with actool"
+  [[ -f "$APP/Contents/Resources/AppIcon.icns" ]] || cp "$HERE/icon/AppIcon.icns" "$APP/Contents/Resources/"
+else
+  echo "Icon: actool unavailable or failed (see build/obj/actool.log); using classic AppIcon.icns"
+  rm -f "$APP/Contents/Resources/Assets.car"
+  cp "$HERE/icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+fi
 
 # Hardened runtime blocks Apple Events unless this entitlement is present.
 ENTITLEMENTS="$OUT/obj/VideoTagsPanel.entitlements"
@@ -104,6 +128,9 @@ if [[ "${INSTALL:-0}" == "1" ]]; then
   mkdir -p "$INSTALL_DIR"
   rm -rf "$DEST"
   ditto "$APP" "$DEST"
+  # Nudge Finder/Dock to pick up a changed icon.
+  touch "$DEST"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST" >/dev/null 2>&1 || true
   open "$DEST"
   echo "Installed and opened: $DEST"
 fi

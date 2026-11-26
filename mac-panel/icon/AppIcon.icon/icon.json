@@ -1,0 +1,29 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.20000,0.21000,0.25000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "tag.png",
+          "name" : "tag"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}
