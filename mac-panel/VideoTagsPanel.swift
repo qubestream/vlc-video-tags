@@ -18,6 +18,8 @@
 //       (⌃⌥Space, ⌃⌥← ⌃⌥→, ⌃⌥↑ ⌃⌥↓ faster/slower, ⌃⌥0 normal speed)
 //     - floats over full-screen VLC and follows you across Spaces
 //     - Undo for the last Trash
+//     - a Comments box that edits the file's Finder Get Info comment and saves
+//       itself when you skip, pause, or quit (⌃⌥C jumps to it)
 //     - starts on its own; no "VLC → Extensions" step every launch
 //
 // Build: ./build.sh (swiftc from Xcode or the Command Line Tools). macOS 14+.
@@ -144,6 +146,109 @@ enum FinderTags {
         var resulting: NSURL?
         try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &resulting)
         return resulting as URL?
+    }
+}
+
+// MARK: - Finder comments (the "Comments" box in Get Info)
+//
+// Get Info shows the comment Finder keeps in the folder's .DS_Store; Spotlight
+// indexes the copy in the com.apple.metadata:kMDItemFinderComment xattr.
+// Writing through Finder updates both, so that is the main path. If Finder
+// automation is refused, reads and writes fall back to the xattr alone, which
+// Spotlight sees but Get Info may not.
+
+final class FinderComments: @unchecked Sendable {
+    enum Failure: Error { case notAuthorized, failed(String) }
+
+    static let xattrName = "com.apple.metadata:kMDItemFinderComment"
+
+    /// Serial: a save for the old video always lands before the load for the next.
+    private let queue = DispatchQueue(label: "dev.qubestream.videotags.comments", qos: .userInitiated)
+
+    /// Queues the read now; `done` runs on the main thread.
+    func read(_ path: String, done: @escaping @MainActor (Result<String, Failure>) -> Void) {
+        queue.async {
+            let result = Self.readNow(path)
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(result) } }
+        }
+    }
+
+    /// Queues the write now; `done` runs on the main thread.
+    func write(_ path: String, _ text: String, done: @escaping @MainActor (Result<Void, Failure>) -> Void) {
+        queue.async {
+            let result = Self.writeNow(path, text)
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(result) } }
+        }
+    }
+
+    /// Blocks until queued reads and writes finish (before Trash, and on quit).
+    func drain() { queue.sync {} }
+
+    /// Synchronous write for app quit.
+    @discardableResult
+    func writeBlocking(_ path: String, _ text: String) -> Result<Void, Failure> {
+        queue.sync { Self.writeNow(path, text) }
+    }
+
+    // MARK: Implementation (runs on `queue`)
+
+    private static func readNow(_ path: String) -> Result<String, Failure> {
+        let source = """
+        set f to (POSIX file \(literal(path))) as alias
+        tell application id "com.apple.finder" to return comment of f
+        """
+        switch run(source) {
+        case .success(let value): return .success(value ?? "")
+        case .failure(.notAuthorized): return .success(readXattr(path) ?? "")
+        case .failure(let failure): return readXattr(path).map { .success($0) } ?? .failure(failure)
+        }
+    }
+
+    private static func writeNow(_ path: String, _ text: String) -> Result<Void, Failure> {
+        guard FileManager.default.fileExists(atPath: path) else { return .failure(.failed("File is gone")) }
+        let source = """
+        set f to (POSIX file \(literal(path))) as alias
+        tell application id "com.apple.finder" to set comment of f to \(literal(text))
+        """
+        switch run(source) {
+        case .success: return .success(())
+        case .failure(let failure):
+            // Keep the words even when Finder says no: Spotlight still gets them.
+            writeXattr(path, text)
+            return .failure(failure)
+        }
+    }
+
+    /// AppleScript string literal; comments may hold quotes, backslashes and newlines.
+    private static func literal(_ s: String) -> String {
+        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
+    private static func run(_ source: String) -> Result<String?, Failure> {
+        guard let script = NSAppleScript(source: source) else { return .failure(.failed("Could not build the Finder script")) }
+        var error: NSDictionary?
+        let result = script.executeAndReturnError(&error)
+        if let error {
+            let number = (error[NSAppleScript.errorNumber] as? Int) ?? 0
+            if number == -1743 { return .failure(.notAuthorized) }
+            return .failure(.failed((error[NSAppleScript.errorMessage] as? String) ?? "Finder error \(number)"))
+        }
+        return .success(result.stringValue)
+    }
+
+    static func readXattr(_ path: String) -> String? {
+        let size = getxattr(path, xattrName, nil, 0, 0, 0)
+        guard size > 0 else { return nil }
+        var data = Data(count: size)
+        let read = data.withUnsafeMutableBytes { getxattr(path, xattrName, $0.baseAddress, size, 0, 0) }
+        guard read > 0 else { return nil }
+        return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? String
+    }
+
+    static func writeXattr(_ path: String, _ text: String) {
+        if text.isEmpty { removexattr(path, xattrName, 0); return }
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: text, format: .binary, options: 0) else { return }
+        _ = data.withUnsafeBytes { setxattr(path, xattrName, $0.baseAddress, data.count, 0, 0) }
     }
 }
 
@@ -491,10 +596,15 @@ final class PanelModel: ObservableObject {
     @Published private(set) var speedStatus: SpeedStatus = .off
     @Published private(set) var rate: Double = 1
     @Published var showSpeedSetup = false
+    @Published var comment = ""                                   // bound to the comment box
+    @Published private(set) var commentLoading = false
+    @Published private(set) var commentFocusRequest = 0
+    @Published private(set) var savedComment = ""
 
     var palette: [String] { Rules.builtins + custom }
     var fileName: String? { currentPath.map { ($0 as NSString).lastPathComponent } }
     var pendingIsCurrent: Bool { pendingDelete != nil && pendingDelete == currentPath }
+    var commentDirty: Bool { commentPath != nil && comment != savedComment }
 
     private let vlc = VLCBridge()
     private var store = PaletteStore()
@@ -503,6 +613,8 @@ final class PanelModel: ObservableObject {
     private var messageTask: Task<Void, Never>?
     private var web: VLCWebSettings?
     private var rateInFlight = false
+    private let comments = FinderComments()
+    private var commentPath: String?      // the file `comment` belongs to
 
     init() {
         custom = store.load()
@@ -544,6 +656,9 @@ final class PanelModel: ObservableObject {
     }
 
     private func apply(_ now: NowPlaying) {
+        // Save the comment before anything moves: on skip, and when playback pauses.
+        if now.path != currentPath || (playing && !now.playing) { saveComment() }
+
         // A different file started: flush the pending delete (skip).
         if let pending = pendingDelete, let next = now.path, next != pending {
             flushPendingDelete()
@@ -563,9 +678,11 @@ final class PanelModel: ObservableObject {
 
     private func setCurrent(_ path: String?) {
         guard path != currentPath else { return }
+        saveComment()
         currentPath = path
         lastProgress = 0
         refreshTags()
+        loadComment(for: path)
     }
 
     private func refreshTags() {
@@ -573,6 +690,65 @@ final class PanelModel: ObservableObject {
         let onFile = FinderTags.read(path)
         let next = palette.filter { onFile.containsIgnoringCase($0) }
         if next != tags { tags = next }
+    }
+
+    // MARK: Finder comment
+
+    /// Writes the comment box to the file's Get Info Comments if it changed.
+    /// Called on skip, pause, VLC quitting, Return, leaving the box, and app quit.
+    func saveComment() {
+        guard let path = commentPath, comment != savedComment else { return }
+        let text = comment
+        savedComment = text
+        let name = (path as NSString).lastPathComponent
+        comments.write(path, text) { [weak self] result in
+            switch result {
+            case .success:
+                self?.flash(text.isEmpty ? "Cleared comment on \(name)" : "Saved comment to \(name)")
+            case .failure(.notAuthorized):
+                self?.flash("Finder access is off, so Get Info won't show it. Allow Finder under Privacy & Security → Automation.")
+            case .failure(.failed(let why)):
+                self?.flash("Could not save comment: \(why)")
+            }
+        }
+    }
+
+    /// Throws away unsaved typing and goes back to what Get Info has.
+    func revertComment() {
+        comment = savedComment
+    }
+
+    /// Saves synchronously; used when the app quits.
+    func saveCommentBeforeQuit() {
+        guard let path = commentPath, comment != savedComment else { return }
+        savedComment = comment
+        comments.writeBlocking(path, comment)
+    }
+
+    func focusComment() {
+        guard currentPath != nil else { flash("No video playing"); return }
+        commentFocusRequest += 1
+    }
+
+    /// Gives the keyboard back to VLC after typing a comment.
+    func returnFocusToVLC() {
+        NSRunningApplication.runningApplications(withBundleIdentifier: Paths.vlcBundleID).first?.activate()
+    }
+
+    private func loadComment(for path: String?) {
+        commentPath = path
+        comment = ""
+        savedComment = ""
+        commentLoading = path != nil
+        guard let path else { return }
+        comments.read(path) { [weak self] result in
+            guard let self, self.commentPath == path else { return }   // already moved on
+            self.commentLoading = false
+            if case .success(let text) = result {
+                self.savedComment = text
+                self.comment = text
+            }
+        }
     }
 
     // MARK: Playback remote
@@ -748,6 +924,7 @@ final class PanelModel: ObservableObject {
     private func flushPendingDelete() {
         guard let path = pendingDelete else { return }
         pendingDelete = nil
+        comments.drain()   // a comment save for this file is queued just before
         try? FinderTags.clear(path, palette: palette)
         do {
             if let trashed = try FinderTags.trash(path) {
@@ -870,6 +1047,7 @@ enum TagColor {
 struct PanelView: View {
     @ObservedObject var model: PanelModel
     @State private var draft = ""
+    @FocusState private var commentFocused: Bool
 
     private let columns = [GridItem(.adaptive(minimum: 92), spacing: 8)]
 
@@ -889,6 +1067,9 @@ struct PanelView: View {
                 addRow
             }
             footer
+            if model.connection != .needsPermission {
+                commentBox
+            }
         }
         .padding(14)
         .frame(width: 340)
@@ -896,6 +1077,55 @@ struct PanelView: View {
         .animation(.snappy(duration: 0.18), value: model.showSpeedSetup)
         .animation(.snappy(duration: 0.18), value: model.tags)
         .animation(.snappy(duration: 0.18), value: model.pendingDelete)
+        .onChange(of: model.commentFocusRequest) { commentFocused = true }
+        .onChange(of: commentFocused) { _, focused in
+            if !focused { model.saveComment() }
+        }
+    }
+
+    // Finder comment: the same text as the Comments box in Get Info
+
+    private var commentBox: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.bubble")
+                    .foregroundStyle(.secondary)
+                Text("Comments")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text(commentStatus)
+                    .font(.caption2)
+                    .foregroundStyle(model.commentDirty ? Color.accentColor : Color.secondary)
+                    .lineLimit(1)
+            }
+            TextField(
+                model.commentLoading ? "Loading…" : "What's in this video?",
+                text: $model.comment,
+                axis: .vertical
+            )
+            .lineLimit(2...6)
+            .textFieldStyle(.roundedBorder)
+            .focused($commentFocused)
+            .disabled(model.currentPath == nil || model.commentLoading)
+            .onSubmit {
+                model.saveComment()
+                model.returnFocusToVLC()
+            }
+            .onExitCommand {
+                model.revertComment()
+                model.returnFocusToVLC()
+            }
+            .help("Saved to Finder's Get Info Comments when you skip, pause or press Return. ⌥Return adds a line, Esc undoes your edit. \(HotKeys.modifierGlyphs)C jumps here.")
+        }
+    }
+
+    private var commentStatus: String {
+        if model.currentPath == nil { return "" }
+        if model.commentLoading { return "Loading…" }
+        if model.commentDirty { return "Saves on skip or pause" }
+        if !model.savedComment.isEmpty { return "Saved in Get Info" }
+        return "\(HotKeys.modifierGlyphs)C to type"
     }
 
     // Playback remote
@@ -1320,6 +1550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        model.saveCommentBeforeQuit()
         HotKeys.shared.unregisterAll()
     }
 
@@ -1336,6 +1567,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         HotKeys.shared.register(keyCode: kVK_Delete, id: 100) { [weak self] in
             self?.model.toggleDelete()
+        }
+        HotKeys.shared.register(keyCode: kVK_ANSI_C, id: 107) { [weak self] in
+            guard let self else { return }
+            self.panel.orderFrontRegardless()
+            self.panel.makeKey()   // non-activating: VLC stays the active app
+            self.model.focusComment()
         }
         let remote: [(key: Int, id: UInt32, action: @MainActor (PanelModel) -> Void)] = [
             (kVK_Space, 101, { $0.playPause() }),
@@ -1359,7 +1596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Show / Hide Panel", action: #selector(togglePanel), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 tags · ⌫ Delete · Space play · ←→ video · ↑↓ speed", action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 tags · ⌫ Delete · C comment · Space play · ←→ video · ↑↓ speed", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())

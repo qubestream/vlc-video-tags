@@ -66,9 +66,10 @@ Clicking Green, Red, or a custom tag cancels a pending delete. Delete removes th
 - **Playback remote** across the top: previous video, back 5 s, play/pause, forward 5 s, next video, and speed (− 1.5× +; click the number for normal speed). Hotkeys: ⌃⌥Space play/pause, ⌃⌥← ⌃⌥→ previous/next video, ⌃⌥↑ ⌃⌥↓ faster/slower, ⌃⌥0 normal speed.
 - **Always there.** Floats above VLC, including full screen, and follows you across Spaces. No **VLC → Extensions** step each launch. It lives in the menu bar (tag icon) with no Dock icon.
 - **Safer Delete.** Marking for Trash keeps the tags until the file is actually trashed, so unmarking loses nothing. After a trash, **Undo** shows for a few seconds.
+- **Comments that save themselves.** The box at the bottom edits the video's Finder **Get Info → Comments**. It loads the comment when a video starts and saves when you go to the next video, pause, press Return, click away, or quit. ⌃⌥C jumps to the box; Return saves and hands the keyboard back to VLC, ⌥Return adds a line, Esc undoes your edit. Spotlight indexes the comment too.
 - **Same palette.** It reads and writes the same `video-tags-palette.txt`, so buttons you add in either place show in both. Right-click a custom tag to remove it from the palette.
 
-It reads the playing file through VLC's AppleScript dictionary and sets tags and Trash with Foundation, so it does not need Finder automation.
+It reads the playing file through VLC's AppleScript dictionary and sets tags and Trash with Foundation. Comments go through Finder, because Get Info reads them from Finder's own `.DS_Store` and not only from the Spotlight attribute, so the first save asks once whether Video Tags Panel may control Finder. If you say no, comments still reach Spotlight (`kMDItemFinderComment`) but not Get Info.
 
 Build (needs Xcode or the Command Line Tools, macOS 14 or later):
 
@@ -82,7 +83,7 @@ open "build/Video Tags Panel.app"
 
 **Speed needs one-time setup.** VLC lets other apps play, pause, skip and seek, but not change speed. The panel changes speed through VLC's built-in web control, limited to this Mac (127.0.0.1). Click the speed control, then **Set up**: the panel quits VLC, turns on the web control in VLC's settings (`vlcrc`, backed up once to `vlcrc.video-tags-backup`), and reopens VLC. A password or port you already set is kept.
 
-The first time, macOS asks whether Video Tags Panel may control VLC. Allow it. If you said no: **System Settings → Privacy & Security → Automation → Video Tags Panel → VLC**.
+The first time, macOS asks whether Video Tags Panel may control VLC, and on the first comment, Finder. Allow both. If you said no: **System Settings → Privacy & Security → Automation → Video Tags Panel**, then turn on VLC and Finder.
 
 Use the panel or the extension's Delete, not both on the same file. Each keeps its own pending delete.
 
