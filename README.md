@@ -78,7 +78,7 @@ cd mac-panel
 open "build/Video Tags Panel.app"
 ```
 
-`INSTALL=1 ./build.sh` copies it to `~/Applications` and opens it. `SIGN_ID="Apple Development: …" ./build.sh` signs with your certificate. With the default ad hoc signature, macOS asks again for VLC access after every rebuild.
+`INSTALL=1 ./build.sh` installs it to `/Applications` and opens it. The first launch from there turns on **Open at Login**; the menu-bar tag icon has a toggle to turn it off. `SIGN_ID="Apple Development: …" ./build.sh` signs with your certificate. With the default ad hoc signature, macOS asks again for VLC access after every rebuild.
 
 **Speed needs one-time setup.** VLC lets other apps play, pause, skip and seek, but not change speed. The panel changes speed through VLC's built-in web control, limited to this Mac (127.0.0.1). Click the speed control, then **Set up**: the panel quits VLC, turns on the web control in VLC's settings (`vlcrc`, backed up once to `vlcrc.video-tags-backup`), and reopens VLC. A password or port you already set is kept.
 

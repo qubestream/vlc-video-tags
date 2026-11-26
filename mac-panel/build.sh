@@ -11,7 +11,8 @@
 #              Automation permission across rebuilds.
 #   ARCHS      default "arm64 x86_64" (universal). "arm64" builds faster.
 #   BUNDLE_ID  default dev.qubestream.videotags.panel
-#   INSTALL=1  also copy the app to ~/Applications and open it.
+#   INSTALL=1  also install the app (INSTALL_DIR, default /Applications) and open it.
+#              The first launch from there turns on Open at Login.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -97,9 +98,12 @@ if [[ "$SIGN_ID" == "-" ]]; then
 fi
 
 if [[ "${INSTALL:-0}" == "1" ]]; then
-  mkdir -p "$HOME/Applications"
-  rm -rf "$HOME/Applications/$APP_NAME.app"
-  ditto "$APP" "$HOME/Applications/$APP_NAME.app"
-  open "$HOME/Applications/$APP_NAME.app"
-  echo "Installed and opened: $HOME/Applications/$APP_NAME.app"
+  INSTALL_DIR="${INSTALL_DIR:-/Applications}"
+  DEST="$INSTALL_DIR/$APP_NAME.app"
+  pkill -x "$EXEC" 2>/dev/null || true
+  mkdir -p "$INSTALL_DIR"
+  rm -rf "$DEST"
+  ditto "$APP" "$DEST"
+  open "$DEST"
+  echo "Installed and opened: $DEST"
 fi
