@@ -14,6 +14,8 @@
 //   for Trash when you skip or the video ends. Same palette file and same
 //   semantics as the Lua extension (1.1), plus what Lua cannot do:
 //     - global hotkeys: ⌃⌥1…⌃⌥9 toggle palette tag N, ⌃⌥⌫ marks/unmarks Delete
+//     - playback remote: previous / next video, play-pause, ±5 s, speed
+//       (⌃⌥Space, ⌃⌥← ⌃⌥→, ⌃⌥↑ ⌃⌥↓ faster/slower, ⌃⌥0 normal speed)
 //     - floats over full-screen VLC and follows you across Spaces
 //     - Undo for the last Trash
 //     - starts on its own; no "VLC → Extensions" step every launch
@@ -44,6 +46,7 @@ enum Rules {
     static let maxTagLength = 40
     static let pollInterval: TimeInterval = 1.0
     static let undoWindow: TimeInterval = 12
+    static let jumpSeconds = 5
 
     /// Same rules as `sanitize_tag_name` in video_tags.lua.
     static func sanitize(_ raw: String) -> String? {
@@ -227,6 +230,44 @@ final class VLCBridge {
         ))
     }
 
+    enum Command {
+        case playPause, next, previous
+        case jump(seconds: Int)
+
+        var source: String {
+            let target = "tell application id \"org.videolan.vlc\""
+            switch self {
+            case .playPause: return "\(target) to play"          // VLC's `play` toggles play/pause
+            case .next: return "\(target) to next"
+            case .previous: return "\(target) to previous"
+            case .jump(let seconds):
+                return """
+                \(target)
+                    set t to (current time) + (\(seconds))
+                    if t < 0 then set t to 0
+                    set current time to t
+                end tell
+                """
+            }
+        }
+    }
+
+    private var commandScripts: [String: NSAppleScript] = [:]
+
+    /// Sends a transport command. Never launches VLC.
+    @discardableResult
+    func send(_ command: Command) -> VLCError? {
+        guard Self.isRunning else { return .notRunning }
+        let source = command.source
+        guard let script = commandScripts[source] ?? NSAppleScript(source: source) else {
+            return .script(0, "Could not build the VLC command")
+        }
+        commandScripts[source] = script
+        var error: NSDictionary?
+        script.executeAndReturnError(&error)
+        return error.map { Self.error(from: $0) }
+    }
+
     /// VLC reports a POSIX path for local files; some builds report a file URL.
     static func localPath(_ raw: String) -> String? {
         if raw.hasPrefix("/") { return raw }
@@ -245,6 +286,171 @@ final class VLCBridge {
     }
 }
 
+// MARK: - Speed over VLC's local web interface
+//
+// VLC 3's AppleScript dictionary has no playback rate, so speed goes through
+// VLC's built-in HTTP interface (/requests/status.json) on 127.0.0.1.
+// One-time setup writes a few settings to vlcrc while VLC is quit.
+
+struct VLCWebSettings: Equatable {
+    var port: Int
+    var password: String
+}
+
+enum VLCPrefs {
+    static let defaultPort = 9842
+
+    static var vlcrc: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/org.videolan.vlc/vlcrc")
+    }
+
+    static var vlcAppURL: URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: Paths.vlcBundleID)
+    }
+
+    /// The web settings VLC will use, or nil while its web interface is off.
+    static func current() -> VLCWebSettings? {
+        guard let text = try? String(contentsOf: vlcrc, encoding: .utf8) else { return nil }
+        let lines = text.components(separatedBy: "\n")
+        let interfaces = (value(lines, section: "core", key: "extraintf") ?? "").split(separator: ":").map(String.init)
+        guard interfaces.contains("http"),
+              let password = value(lines, section: "lua", key: "http-password"), !password.isEmpty else { return nil }
+        let port = value(lines, section: "core", key: "http-port").flatMap { Int($0) } ?? 8080
+        return VLCWebSettings(port: port, password: password)
+    }
+
+    /// Turns on VLC's web interface on localhost. Keeps a password, port or
+    /// host the user already set. Call only while VLC is not running, because
+    /// VLC can rewrite vlcrc when it quits. Backs up the original once.
+    static func enableWebInterface() throws -> VLCWebSettings {
+        let existing = (try? String(contentsOf: vlcrc, encoding: .utf8)) ?? ""
+        var lines = existing.isEmpty ? [] : existing.components(separatedBy: "\n")
+
+        var interfaces = (value(lines, section: "core", key: "extraintf") ?? "")
+            .split(separator: ":").map(String.init).filter { !$0.isEmpty }
+        if !interfaces.contains("http") { interfaces.append("http") }
+        set(&lines, section: "core", key: "extraintf", to: interfaces.joined(separator: ":"))
+
+        var password = value(lines, section: "lua", key: "http-password") ?? ""
+        if password.isEmpty {
+            password = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            set(&lines, section: "lua", key: "http-password", to: password)
+        }
+
+        let port: Int
+        if let configured = value(lines, section: "core", key: "http-port").flatMap({ Int($0) }) {
+            port = configured
+        } else {
+            port = defaultPort
+            set(&lines, section: "core", key: "http-port", to: String(port))
+        }
+
+        if value(lines, section: "core", key: "http-host") == nil {
+            set(&lines, section: "core", key: "http-host", to: "127.0.0.1")
+        }
+
+        let fm = FileManager.default
+        try fm.createDirectory(at: vlcrc.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !existing.isEmpty {
+            let backup = vlcrc.appendingPathExtension("video-tags-backup")
+            if !fm.fileExists(atPath: backup.path) {
+                try? existing.write(to: backup, atomically: true, encoding: .utf8)
+            }
+        }
+        try lines.joined(separator: "\n").write(to: vlcrc, atomically: true, encoding: .utf8)
+        return VLCWebSettings(port: port, password: password)
+    }
+
+    // vlcrc is INI-style: "[core] # core program" headers, "key=value" lines,
+    // and "#key=default" for settings left at their default.
+
+    private static func sectionName(_ line: String) -> String? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("["), let close = t.firstIndex(of: "]") else { return nil }
+        return String(t[t.index(after: t.startIndex)..<close])
+    }
+
+    private static func sectionRange(_ lines: [String], _ section: String) -> Range<Int>? {
+        guard let start = lines.firstIndex(where: { sectionName($0) == section }) else { return nil }
+        let end = lines[(start + 1)...].firstIndex(where: { sectionName($0) != nil }) ?? lines.count
+        return (start + 1)..<end
+    }
+
+    static func value(_ lines: [String], section: String, key: String) -> String? {
+        guard let range = sectionRange(lines, section) else { return nil }
+        for line in lines[range] {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix(key + "=") { return String(t.dropFirst(key.count + 1)) }
+        }
+        return nil
+    }
+
+    private static func set(_ lines: inout [String], section: String, key: String, to newValue: String) {
+        let entry = "\(key)=\(newValue)"
+        guard let range = sectionRange(lines, section) else {
+            if let last = lines.last, !last.isEmpty { lines.append("") }
+            lines.append("[\(section)]")
+            lines.append(entry)
+            return
+        }
+        let trimmed: (Int) -> String = { lines[$0].trimmingCharacters(in: .whitespaces) }
+        if let i = range.first(where: { trimmed($0).hasPrefix(key + "=") }) {
+            lines[i] = entry
+        } else if let i = range.first(where: { trimmed($0).hasPrefix("#" + key + "=") }) {
+            lines[i] = entry
+        } else {
+            lines.insert(entry, at: range.lowerBound)
+        }
+    }
+}
+
+enum VLCWeb {
+    enum Failure: Error { case unreachable, unauthorized, badReply }
+
+    /// Reads the playback rate, setting it first when `newRate` is given.
+    static func rate(_ settings: VLCWebSettings, set newRate: Double? = nil) async -> Result<Double, Failure> {
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = "127.0.0.1"
+        components.port = settings.port
+        components.path = "/requests/status.json"
+        if let newRate {
+            components.queryItems = [
+                URLQueryItem(name: "command", value: "rate"),
+                URLQueryItem(name: "val", value: String(format: "%.2f", newRate)),
+            ]
+        }
+        guard let url = components.url else { return .failure(.badReply) }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 1.5)
+        let token = Data(":\(settings.password)".utf8).base64EncodedString()
+        request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 401 { return .failure(.unauthorized) }
+            guard code == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let rate = (json["rate"] as? NSNumber)?.doubleValue else { return .failure(.badReply) }
+            return .success(rate)
+        } catch {
+            return .failure(.unreachable)
+        }
+    }
+}
+
+enum Speed {
+    static let steps: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
+
+    static func faster(than rate: Double) -> Double { steps.first { $0 > rate + 0.01 } ?? steps[steps.count - 1] }
+    static func slower(than rate: Double) -> Double { steps.last { $0 < rate - 0.01 } ?? steps[0] }
+
+    static func label(_ rate: Double) -> String {
+        let rounded = (rate * 100).rounded() / 100
+        return String(format: "%g×", rounded)
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -256,6 +462,13 @@ final class PanelModel: ObservableObject {
         case playing
         case needsPermission
         case failed(String)
+    }
+
+    enum SpeedStatus: Equatable {
+        case off          // VLC's web interface is not set up
+        case settingUp    // quitting VLC, writing vlcrc, reopening
+        case connecting   // set up, waiting for VLC to answer (it may need one restart)
+        case ready
     }
 
     struct LastTrash {
@@ -273,6 +486,9 @@ final class PanelModel: ObservableObject {
     @Published private(set) var playing = false
     @Published private(set) var message: String?
     @Published private(set) var lastTrash: LastTrash?
+    @Published private(set) var speedStatus: SpeedStatus = .off
+    @Published private(set) var rate: Double = 1
+    @Published var showSpeedSetup = false
 
     var palette: [String] { Rules.builtins + custom }
     var fileName: String? { currentPath.map { ($0 as NSString).lastPathComponent } }
@@ -283,9 +499,13 @@ final class PanelModel: ObservableObject {
     private var timer: Timer?
     private var lastProgress: Double = 0
     private var messageTask: Task<Void, Never>?
+    private var web: VLCWebSettings?
+    private var rateInFlight = false
 
     init() {
         custom = store.load()
+        web = VLCPrefs.current()
+        speedStatus = web == nil ? .off : .connecting
     }
 
     func start() {
@@ -310,12 +530,14 @@ final class PanelModel: ObservableObject {
             setCurrent(nil)
             playing = false
             progress = 0
+            rate = 1
         case .failure(.notAuthorized):
             connection = .needsPermission
         case .failure(.script(let code, let text)):
             connection = .failed("\(text) (\(code))")
         case .success(let now):
             apply(now)
+            refreshRate()
         }
     }
 
@@ -349,6 +571,100 @@ final class PanelModel: ObservableObject {
         let onFile = FinderTags.read(path)
         let next = palette.filter { onFile.containsIgnoringCase($0) }
         if next != tags { tags = next }
+    }
+
+    // MARK: Playback remote
+
+    func playPause() { send(.playPause) }
+    func nextVideo() { send(.next) }
+    func previousVideo() { send(.previous) }
+    func jumpBack() { send(.jump(seconds: -Rules.jumpSeconds)) }
+    func jumpForward() { send(.jump(seconds: Rules.jumpSeconds)) }
+
+    func faster() { setRate(Speed.faster(than: rate)) }
+    func slower() { setRate(Speed.slower(than: rate)) }
+    func normalSpeed() { setRate(1) }
+
+    private func send(_ command: VLCBridge.Command) {
+        switch vlc.send(command) {
+        case nil: tick()   // show the new state right away
+        case .notRunning?: flash("VLC is not running")
+        case .notAuthorized?: connection = .needsPermission
+        case .script(let code, let text)?: flash("VLC: \(text) (\(code))")
+        }
+    }
+
+    private func setRate(_ newRate: Double) {
+        guard let web, speedStatus == .ready else {
+            if speedStatus == .connecting {
+                flash("Waiting for VLC's web control. If this stays, quit and reopen VLC.")
+            } else {
+                showSpeedSetup = true
+            }
+            return
+        }
+        rate = newRate   // optimistic; the reply confirms it
+        Task { @MainActor [weak self] in
+            let result = await VLCWeb.rate(web, set: newRate)
+            self?.handleRate(result)
+        }
+    }
+
+    private func refreshRate() {
+        guard let web, !rateInFlight, speedStatus != .settingUp else { return }
+        rateInFlight = true
+        Task { @MainActor [weak self] in
+            let result = await VLCWeb.rate(web)
+            self?.rateInFlight = false
+            self?.handleRate(result)
+        }
+    }
+
+    private func handleRate(_ result: Result<Double, VLCWeb.Failure>) {
+        switch result {
+        case .success(let value):
+            rate = value
+            speedStatus = .ready
+        case .failure(.unauthorized):
+            // Someone changed VLC's web password; set up again picks it up.
+            web = nil
+            speedStatus = .off
+        case .failure:
+            if speedStatus == .ready { speedStatus = .connecting }
+        }
+    }
+
+    /// One-time setup: quit VLC, turn on its web interface on localhost, reopen it.
+    func setUpSpeed() {
+        guard speedStatus != .settingUp else { return }
+        guard let appURL = VLCPrefs.vlcAppURL else { flash("VLC is not installed"); return }
+        speedStatus = .settingUp
+        showSpeedSetup = false
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: Paths.vlcBundleID)
+            running.forEach { $0.terminate() }
+            for _ in 0..<60 where VLCBridge.isRunning {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard !VLCBridge.isRunning else {
+                self.speedStatus = self.web == nil ? .off : .connecting
+                self.flash("VLC didn't quit. Quit it, then try Set up again.")
+                return
+            }
+            do {
+                self.web = try VLCPrefs.enableWebInterface()
+            } catch {
+                self.speedStatus = .off
+                self.flash("Could not update VLC settings: \(error.localizedDescription)")
+                return
+            }
+            self.speedStatus = .connecting
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = false
+            _ = try? await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
+            self.flash("Speed control is on. VLC reopened.")
+        }
     }
 
     // MARK: Actions
@@ -557,6 +873,11 @@ struct PanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            transportBar
+            if model.showSpeedSetup {
+                speedSetupCard
+            }
+            Divider().opacity(0.5)
             header
             if model.connection == .needsPermission {
                 permissionCard
@@ -568,10 +889,106 @@ struct PanelView: View {
             footer
         }
         .padding(14)
-        .frame(width: 330)
+        .frame(width: 340)
         .background(.regularMaterial)
+        .animation(.snappy(duration: 0.18), value: model.showSpeedSetup)
         .animation(.snappy(duration: 0.18), value: model.tags)
         .animation(.snappy(duration: 0.18), value: model.pendingDelete)
+    }
+
+    // Playback remote
+
+    private var transportBar: some View {
+        HStack(spacing: 2) {
+            TransportButton(symbol: "backward.end.fill", help: "Previous video  ⌃⌥←") { model.previousVideo() }
+            TransportButton(symbol: "gobackward.5", help: "Back \(Rules.jumpSeconds) seconds") { model.jumpBack() }
+            TransportButton(
+                symbol: model.playing ? "pause.fill" : "play.fill",
+                help: "Play / Pause  ⌃⌥Space",
+                prominent: true
+            ) { model.playPause() }
+            TransportButton(symbol: "goforward.5", help: "Forward \(Rules.jumpSeconds) seconds") { model.jumpForward() }
+            TransportButton(symbol: "forward.end.fill", help: "Next video  ⌃⌥→") { model.nextVideo() }
+            Spacer(minLength: 8)
+            speedControl
+        }
+        .disabled(model.connection == .vlcNotRunning || model.connection == .needsPermission)
+        .opacity(model.connection == .vlcNotRunning ? 0.5 : 1)
+    }
+
+    private var speedControl: some View {
+        let ready = model.speedStatus == .ready
+        let changed = ready && abs(model.rate - 1) > 0.01
+        return HStack(spacing: 0) {
+            Button { model.slower() } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 24, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .help("Slower  ⌃⌥↓")
+
+            Button { ready ? model.normalSpeed() : model.faster() } label: {
+                Text(speedLabel)
+                    .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
+                    .foregroundStyle(ready ? Color.primary : Color.secondary)
+                    .frame(minWidth: 44)
+                    .contentShape(Rectangle())
+            }
+            .help(ready ? "Back to normal speed  ⌃⌥0" : "Set up speed control")
+
+            Button { model.faster() } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 24, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .help("Faster  ⌃⌥↑")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 2)
+        .background(
+            Capsule(style: .continuous)
+                .fill(changed ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(changed ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1))
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Playback speed")
+    }
+
+    private var speedLabel: String {
+        switch model.speedStatus {
+        case .ready: return Speed.label(model.rate)
+        case .settingUp, .connecting: return "…"
+        case .off: return "Speed"
+        }
+    }
+
+    private var speedSetupCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Turn on speed control?")
+                .font(.callout.weight(.semibold))
+            Text("VLC only lets other apps change speed through its built-in web control. Set up turns it on for this Mac only and restarts VLC once. Your other VLC settings stay as they are.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Not now") { model.showSpeedSetup = false }
+                Button("Set up") { model.setUpSpeed() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     // Header: what is playing, and how far along
@@ -726,6 +1143,36 @@ struct PanelView: View {
     }
 }
 
+struct TransportButton: View {
+    let symbol: String
+    let help: String
+    var prominent = false
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: prominent ? 15 : 12, weight: .semibold))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: prominent ? 34 : 28, height: prominent ? 34 : 28)
+                .background(
+                    Circle().fill(
+                        prominent
+                            ? Color.accentColor.opacity(hovering ? 0.35 : 0.22)
+                            : Color.primary.opacity(hovering ? 0.10 : 0)
+                    )
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
 struct TagChip: View {
     let name: String
     let hotkey: String?
@@ -783,7 +1230,7 @@ struct TagChip: View {
 final class FloatingPanel: NSPanel {
     init<Content: View>(rootView: Content) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 330, height: 260),
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 300),
             styleMask: [.titled, .closable, .nonactivatingPanel, .utilityWindow, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -858,6 +1305,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeys.shared.register(keyCode: kVK_Delete, id: 100) { [weak self] in
             self?.model.toggleDelete()
         }
+        let remote: [(key: Int, id: UInt32, action: @MainActor (PanelModel) -> Void)] = [
+            (kVK_Space, 101, { $0.playPause() }),
+            (kVK_LeftArrow, 102, { $0.previousVideo() }),
+            (kVK_RightArrow, 103, { $0.nextVideo() }),
+            (kVK_UpArrow, 104, { $0.faster() }),
+            (kVK_DownArrow, 105, { $0.slower() }),
+            (kVK_ANSI_0, 106, { $0.normalSpeed() }),
+        ]
+        for entry in remote {
+            HotKeys.shared.register(keyCode: entry.key, id: entry.id) { [weak self] in
+                guard let model = self?.model else { return }
+                entry.action(model)
+            }
+        }
     }
 
     private func installStatusItem() {
@@ -866,7 +1327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Show / Hide Panel", action: #selector(togglePanel), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 toggle tags · \(HotKeys.modifierGlyphs)⌫ Delete", action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 tags · ⌫ Delete · Space play · ←→ video · ↑↓ speed", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())

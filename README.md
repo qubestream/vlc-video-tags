@@ -63,6 +63,7 @@ Clicking Green, Red, or a custom tag cancels a pending delete. Delete removes th
 `mac-panel/` holds **Video Tags Panel**, a small native app that does the same job as the extension from outside VLC, plus what a Lua extension cannot do:
 
 - **Global hotkeys.** ⌃⌥1 to ⌃⌥9 toggle palette tag 1 to 9 (Green is 1, Red is 2, then your custom tags in order). ⌃⌥⌫ marks or unmarks the current video for Trash.
+- **Playback remote** across the top: previous video, back 5 s, play/pause, forward 5 s, next video, and speed (− 1.5× +; click the number for normal speed). Hotkeys: ⌃⌥Space play/pause, ⌃⌥← ⌃⌥→ previous/next video, ⌃⌥↑ ⌃⌥↓ faster/slower, ⌃⌥0 normal speed.
 - **Always there.** Floats above VLC, including full screen, and follows you across Spaces. No **VLC → Extensions** step each launch. It lives in the menu bar (tag icon) with no Dock icon.
 - **Safer Delete.** Marking for Trash keeps the tags until the file is actually trashed, so unmarking loses nothing. After a trash, **Undo** shows for a few seconds.
 - **Same palette.** It reads and writes the same `video-tags-palette.txt`, so buttons you add in either place show in both. Right-click a custom tag to remove it from the palette.
@@ -78,6 +79,8 @@ open "build/Video Tags Panel.app"
 ```
 
 `INSTALL=1 ./build.sh` copies it to `~/Applications` and opens it. `SIGN_ID="Apple Development: …" ./build.sh` signs with your certificate. With the default ad hoc signature, macOS asks again for VLC access after every rebuild.
+
+**Speed needs one-time setup.** VLC lets other apps play, pause, skip and seek, but not change speed. The panel changes speed through VLC's built-in web control, limited to this Mac (127.0.0.1). Click the speed control, then **Set up**: the panel quits VLC, turns on the web control in VLC's settings (`vlcrc`, backed up once to `vlcrc.video-tags-backup`), and reopens VLC. A password or port you already set is kept.
 
 The first time, macOS asks whether Video Tags Panel may control VLC. Allow it. If you said no: **System Settings → Privacy & Security → Automation → Video Tags Panel → VLC**.
 
