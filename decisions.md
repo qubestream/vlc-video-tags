@@ -18,6 +18,10 @@ Green, Red, Delete, and custom palette tags are exclusive. Clicking a non-Delete
 
 Glen wanted more than one tag per video. Each palette button now toggles its Finder tag on the current file and leaves the others alone. A ✓ on the button and the status line show what the file has, read from Finder when the file starts. Delete still clears the palette tags and stays exclusive with tagging (a tag click cancels a pending delete). Version 1.1.
 
+## 2026-11-26 — Playback remote in the panel; speed via VLC's web interface
+
+Glen wanted to drive playback from the panel: previous/next video, play/pause, 5 s jumps (his pick), faster/slower. VLC 3's AppleScript dictionary covers play/pause, next, previous and `current time` (seek), but has no playback rate. Speed goes through VLC's built-in HTTP interface on 127.0.0.1, turned on by a one-click setup that edits vlcrc while VLC is quit. Accessibility-based UI scripting was rejected (extra permission, brittle menus). AI tag suggestions were proposed and parked: Glen wants tagging manual for now.
+
 ## 2026-11-26 — Native floating panel alongside the Lua extension
 
 VLC Lua cannot bind hotkeys or float over full screen, and it has to be enabled every launch. `mac-panel/` adds a native AppKit + SwiftUI panel (macOS 14+) that reads the playing file over VLC's AppleScript dictionary, writes tags with `NSURLTagNamesKey`, and trashes with `FileManager.trashItem`. It shares `video-tags-palette.txt` with the extension. Differences on purpose: global hotkeys (⌃⌥1–9, ⌃⌥⌫), Delete keeps tags until the trash actually happens, and Undo after trash. The Lua extension stays the zero-build option.

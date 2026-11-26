@@ -17,7 +17,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Video Tags Panel"
 EXEC="VideoTagsPanel"
-VERSION="1.2.0"
+VERSION="1.3.0"
 MIN_MACOS="14.0"
 BUNDLE_ID="${BUNDLE_ID:-dev.qubestream.videotags.panel}"
 SIGN_ID="${SIGN_ID:--}"
@@ -62,6 +62,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
   <key>NSHumanReadableCopyright</key><string>Copyright (C) 2026 Glen Pridgen. GPL-2.0-or-later.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSAppleEventsUsageDescription</key>
   <string>Video Tags Panel asks VLC which file is playing so it can tag it.</string>
 </dict>
