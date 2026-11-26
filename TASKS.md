@@ -14,6 +14,8 @@
 
 ## Open
 
+- [ ] Build, sign and test `mac-panel/` on the M1 in Xcode (first compile; cloud had no Swift). Check: hotkeys, full-screen float, Delete on skip and on last-item end, Undo, palette sync with the extension.
+
 - [ ] Optional: macOS keyboard shortcuts to the extension (VLC Lua cannot bind keys itself).
 - [ ] Watch: Delete on last-item natural end — if it flakes, add a Lua interface poll (deferred from v1).
 - [ ] Out of scope unless asked: Windows/Linux, auto-start, URL/streams, undo from Trash.
