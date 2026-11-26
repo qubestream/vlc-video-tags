@@ -58,6 +58,33 @@ Custom tags live in `~/Library/Application Support/org.videolan.vlc/video-tags-p
 
 Clicking Green, Red, or a custom tag cancels a pending delete. Delete removes the palette tags from the file.
 
+## Native floating panel (macOS, preview)
+
+`mac-panel/` holds **Video Tags Panel**, a small native app that does the same job as the extension from outside VLC, plus what a Lua extension cannot do:
+
+- **Global hotkeys.** ⌃⌥1 to ⌃⌥9 toggle palette tag 1 to 9 (Green is 1, Red is 2, then your custom tags in order). ⌃⌥⌫ marks or unmarks the current video for Trash.
+- **Always there.** Floats above VLC, including full screen, and follows you across Spaces. No **VLC → Extensions** step each launch. It lives in the menu bar (tag icon) with no Dock icon.
+- **Safer Delete.** Marking for Trash keeps the tags until the file is actually trashed, so unmarking loses nothing. After a trash, **Undo** shows for a few seconds.
+- **Same palette.** It reads and writes the same `video-tags-palette.txt`, so buttons you add in either place show in both. Right-click a custom tag to remove it from the palette.
+
+It reads the playing file through VLC's AppleScript dictionary and sets tags and Trash with Foundation, so it does not need Finder automation.
+
+Build (needs Xcode or the Command Line Tools, macOS 14 or later):
+
+```bash
+cd mac-panel
+./build.sh
+open "build/Video Tags Panel.app"
+```
+
+`INSTALL=1 ./build.sh` copies it to `~/Applications` and opens it. `SIGN_ID="Apple Development: …" ./build.sh` signs with your certificate. With the default ad hoc signature, macOS asks again for VLC access after every rebuild.
+
+The first time, macOS asks whether Video Tags Panel may control VLC. Allow it. If you said no: **System Settings → Privacy & Security → Automation → Video Tags Panel → VLC**.
+
+Use the panel or the extension's Delete, not both on the same file. Each keeps its own pending delete.
+
+Status: preview. Not yet built in CI; first build and sign happen in Xcode on a Mac.
+
 ## If Video Tags is missing from the menu
 
 Addons Manager listing `video_tags.lua` only means the file is on disk. That list does not start the extension.
