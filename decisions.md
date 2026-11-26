@@ -14,6 +14,10 @@ VLC Lua cannot bind global keys. v1 is a panel: Green, Red, Delete, plus tags ad
 
 Green, Red, Delete, and custom palette tags are exclusive. Clicking a non-Delete tag cancels a pending delete. Unrelated Finder tags (e.g. Work) are kept.
 
+## 2026-11-25 — Tags toggle; a video can have several (supersedes "Last click wins")
+
+Glen wanted more than one tag per video. Each palette button now toggles its Finder tag on the current file and leaves the others alone. A ✓ on the button and the status line show what the file has, read from Finder when the file starts. Delete still clears the palette tags and stays exclusive with tagging (a tag click cancels a pending delete). Version 1.1.
+
 ## 2026-08-13 — Growing palette
 
 Type a name + Add → new button, applied to the current video, persisted in `video-tags-palette.txt`. Remove drops a custom name from the palette only.

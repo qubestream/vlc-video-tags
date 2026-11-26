@@ -35,6 +35,8 @@ need 'function click_green|click_Green|on_tag\("Green"\)' "Green action"
 need 'Delete' "Delete control"
 need 'video-tags-palette.txt' "palette persistence path"
 need 'video-tags-finder_ops.applescript' "Finder helper path"
+need 'toggle-tag' "tag buttons toggle"
+need 'function read_file_tags' "reads existing tags when a file starts"
 
 # VLC scans extensions in a bare luaL_newstate() with no standard libraries.
 # Unindented os./io. calls at file scope make descriptor() never run, so the

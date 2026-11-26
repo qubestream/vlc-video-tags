@@ -8,7 +8,8 @@
 -- the Free Software Foundation; either version 2 of the License, or
 -- (at your option) any later version.
 --
--- Green / Red / custom names become macOS Finder tags (last click wins).
+-- Green / Red / custom names are macOS Finder tags. Each button toggles its
+-- tag on the current file, so a video can carry several. A ✓ marks tags it has.
 -- Delete moves the file to Trash after skip or when the video ends.
 
 -- VLC copies extension callbacks into another environment; top-level locals
@@ -29,18 +30,20 @@ name_input = nil
 custom_tags = {}
 current_path = nil
 current_choice = nil
+current_tags = {}
+tag_buttons = {}
 pending_path = nil
 rebuilding = false
 
 function descriptor()
     return {
         title = "Video Tags",
-        version = "1.0",
+        version = "1.1",
         author = "Glen Pridgen",
         url = "https://github.com/qubestream/vlc-video-tags",
         shortdesc = "Tag videos with Finder tags or send them to Trash",
         description = "Floating palette: Green, Red, Delete, plus tags you add. "
-            .. "One tag per video. Delete trashes the file when you skip or the video ends.",
+            .. "Each button toggles its tag, so a video can have several. Delete trashes the file when you skip or the video ends.",
         capabilities = { "input-listener", "playing-listener" }
     }
 end
@@ -50,6 +53,7 @@ function activate()
     custom_tags = load_palette()
     current_path = peek_path()
     current_choice = nil
+    current_tags = read_file_tags(current_path)
     create_dialog()
 end
 
@@ -78,9 +82,11 @@ function input_changed()
     current_path = new_path
     if path_changed then
         current_choice = nil
+        current_tags = read_file_tags(new_path)
         if filename_label then
             filename_label:set_text(filename_text())
         end
+        refresh_buttons()
         if not flushed then
             refresh_status()
         end
@@ -124,8 +130,8 @@ function click_add()
     end
     custom_tags[#custom_tags + 1] = name
     save_palette()
-    on_tag(name)
     rebuild_dialog()
+    on_add_tag(name)
 end
 
 function click_remove()
@@ -148,6 +154,7 @@ function click_remove()
         end
         removed = table.remove(custom_tags)
     end
+    remove_from_list(current_tags, removed)
     save_palette()
     rebuild_dialog()
     set_status("Removed " .. removed .. " from palette")
@@ -159,15 +166,16 @@ function create_dialog()
     dlg = vlc.dialog("Video Tags")
     filename_label = dlg:add_label(filename_text(), 1, 1, 3, 1)
     status_label = dlg:add_label(status_text(), 1, 2, 3, 1)
-    dlg:add_button("Green", click_green, 1, 3, 1, 1)
-    dlg:add_button("Red", click_red, 2, 3, 1, 1)
+    tag_buttons = {}
+    tag_buttons["Green"] = dlg:add_button(button_label("Green"), click_green, 1, 3, 1, 1)
+    tag_buttons["Red"] = dlg:add_button(button_label("Red"), click_red, 2, 3, 1, 1)
     dlg:add_button("Delete", click_delete, 3, 3, 1, 1)
 
     local row = 4
     local col = 1
     for i = 1, #custom_tags do
         local name = custom_tags[i]
-        dlg:add_button(name, make_tag_click(name), col, row, 1, 1)
+        tag_buttons[name] = dlg:add_button(button_label(name), make_tag_click(name), col, row, 1, 1)
         col = col + 1
         if col > 3 then
             col = 1
@@ -192,6 +200,7 @@ function destroy_dialog()
     filename_label = nil
     status_label = nil
     name_input = nil
+    tag_buttons = {}
 end
 
 function rebuild_dialog()
@@ -211,7 +220,21 @@ function refresh_labels()
     if filename_label then
         filename_label:set_text(filename_text())
     end
+    refresh_buttons()
     refresh_status()
+end
+
+function refresh_buttons()
+    for name, button in pairs(tag_buttons) do
+        pcall(function() button:set_text(button_label(name)) end)
+    end
+end
+
+function button_label(name)
+    if name_in_list(current_tags, name) then
+        return "✓ " .. name
+    end
+    return name
 end
 
 function refresh_status()
@@ -231,10 +254,10 @@ function status_text()
     if current_choice == "Delete" then
         return "Will delete when this video ends or you skip"
     end
-    if current_choice then
-        return "Tagged " .. current_choice
+    if #current_tags > 0 then
+        return "Tags: " .. table.concat(current_tags, ", ")
     end
-    return "No tag selected"
+    return "No tags"
 end
 
 function set_status(text)
@@ -255,15 +278,84 @@ function on_tag(name)
     if pending_path == path then
         pending_path = nil
     end
-    local ok, out = finder_run("set-tag", path, name, palette_csv())
+    if current_choice == "Delete" then
+        current_choice = nil
+    end
+    local ok, out = finder_run("toggle-tag", path, name)
+    if not ok then
+        set_status("Could not change Finder tag: " .. out)
+        return
+    end
+    if out == "off" then
+        remove_from_list(current_tags, name)
+        refresh_labels()
+        osd("Removed " .. name)
+        log("Removed " .. name .. " -> " .. path)
+    else
+        add_to_list(current_tags, name)
+        refresh_labels()
+        osd("Tagged " .. name)
+        log("Tagged " .. name .. " -> " .. path)
+    end
+end
+
+function on_add_tag(name)
+    local path, err = require_local_path()
+    if not path then
+        set_status("Added " .. name .. " to palette. " .. err)
+        return
+    end
+    if pending_path == path then
+        pending_path = nil
+    end
+    if current_choice == "Delete" then
+        current_choice = nil
+    end
+    local ok, out = finder_run("add-tag", path, name)
     if not ok then
         set_status("Could not set Finder tag: " .. out)
         return
     end
-    current_choice = name
+    add_to_list(current_tags, name)
     refresh_labels()
     osd("Tagged " .. name)
     log("Tagged " .. name .. " -> " .. path)
+end
+
+function read_file_tags(path)
+    local list = {}
+    if not path then return list end
+    local ok, out = finder_run("get-tags", path)
+    if not ok then
+        log("get-tags failed: " .. out)
+        return list
+    end
+    local palette = palette_names()
+    for line in string.gmatch(out .. "\n", "(.-)\n") do
+        local name = trim(line)
+        for i = 1, #palette do
+            if string.lower(palette[i]) == string.lower(name) then
+                add_to_list(list, palette[i])
+            end
+        end
+    end
+    return list
+end
+
+function add_to_list(list, name)
+    if not name_in_list(list, name) then
+        list[#list + 1] = name
+    end
+end
+
+function remove_from_list(list, name)
+    if not name then return end
+    local want = string.lower(name)
+    for i = #list, 1, -1 do
+        if string.lower(list[i]) == want then
+            table.remove(list, i)
+        end
+    end
 end
 
 function on_delete()
@@ -278,6 +370,7 @@ function on_delete()
     end
     pending_path = path
     current_choice = "Delete"
+    current_tags = {}
     refresh_labels()
     osd("Will delete when this video ends or you skip")
 end
@@ -307,9 +400,11 @@ function maybe_flush_on_natural_end()
     flush_pending_delete()
     current_path = peek_path()
     current_choice = nil
+    current_tags = read_file_tags(current_path)
     if filename_label then
         filename_label:set_text(filename_text())
     end
+    refresh_buttons()
 end
 
 function require_local_path()
@@ -365,12 +460,16 @@ function finder_run(cmd, ...)
     return true, trim(out)
 end
 
-function palette_csv()
+function palette_names()
     local names = { "Green", "Red" }
     for i = 1, #custom_tags do
         names[#names + 1] = custom_tags[i]
     end
-    return table.concat(names, ",")
+    return names
+end
+
+function palette_csv()
+    return table.concat(palette_names(), ",")
 end
 
 function load_palette()
