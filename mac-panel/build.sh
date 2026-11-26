@@ -18,7 +18,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Video Tags Panel"
 EXEC="VideoTagsPanel"
-VERSION="1.3.1"
+VERSION="1.3.0"
 MIN_MACOS="14.0"
 BUNDLE_ID="${BUNDLE_ID:-dev.qubestream.videotags.panel}"
 SIGN_ID="${SIGN_ID:--}"
