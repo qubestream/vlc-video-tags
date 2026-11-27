@@ -835,6 +835,7 @@ final class PanelModel: ObservableObject {
     private var messageTask: Task<Void, Never>?
     private var web: VLCWebSettings?
     private var rateInFlight = false
+    private var rateGeneration = 0
     private let comments = FinderComments()
     private var commentPath: String?      // the file `comment` belongs to
 
@@ -1057,6 +1058,7 @@ final class PanelModel: ObservableObject {
             return
         }
         rate = newRate   // optimistic; the reply confirms it
+        rateGeneration += 1   // any status read already on its way is now stale
         Task { @MainActor [weak self] in
             let result = await VLCWeb.rate(web, set: newRate)
             self?.handleRate(result)
@@ -1066,10 +1068,14 @@ final class PanelModel: ObservableObject {
     private func refreshRate() {
         guard let web, !rateInFlight, speedStatus != .settingUp else { return }
         rateInFlight = true
+        let generation = rateGeneration
         Task { @MainActor [weak self] in
             let result = await VLCWeb.rate(web)
-            self?.rateInFlight = false
-            self?.handleRate(result)
+            guard let self else { return }
+            self.rateInFlight = false
+            // A speed change landed while this read was out: its answer is the old speed.
+            if case .success = result, generation != self.rateGeneration { return }
+            self.handleRate(result)
         }
     }
 
@@ -1623,14 +1629,9 @@ struct PanelView: View {
             }
             .help("Slower  ⌃⌥↓")
 
-            Button { ready ? model.normalSpeed() : model.faster() } label: {
-                Text(speedLabel)
-                    .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
-                    .foregroundStyle(ready ? Color.primary : Color.secondary)
-                    .frame(minWidth: 44)
-                    .contentShape(Rectangle())
+            SpeedResetButton(label: speedLabel, ready: ready, changed: changed) {
+                ready ? model.normalSpeed() : model.faster()
             }
-            .help(ready ? "Back to normal speed  ⌃⌥0" : "Set up speed control")
 
             Button { model.faster() } label: {
                 Image(systemName: "plus")
@@ -1652,6 +1653,37 @@ struct PanelView: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Playback speed")
+    }
+
+    /// The number in the middle of the speed control. Clicking it goes back to 1×.
+    private struct SpeedResetButton: View {
+        let label: String
+        let ready: Bool
+        let changed: Bool
+        let action: () -> Void
+        @State private var hovering = false
+
+        var body: some View {
+            Button(action: action) {
+                Text(label)
+                    .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
+                    .foregroundStyle(ready ? Color.primary : Color.secondary)
+                    .frame(minWidth: 44, minHeight: 22)
+                    .padding(.horizontal, 2)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.primary.opacity(hovering && (changed || !ready) ? 0.12 : 0))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .onHover { inside in
+                hovering = inside
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+            .onDisappear { if hovering { NSCursor.pop(); hovering = false } }
+            .help(ready ? (changed ? "Reset to 1×  ⌃⌥0" : "Normal speed  ⌃⌥0") : "Set up speed control")
+            .accessibilityLabel(ready ? "Speed \(label). Reset to 1×" : "Set up speed control")
+        }
     }
 
     private var speedLabel: String {
