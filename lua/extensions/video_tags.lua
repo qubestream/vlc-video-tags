@@ -8,9 +8,9 @@
 -- the Free Software Foundation; either version 2 of the License, or
 -- (at your option) any later version.
 --
--- Green / Red / custom names are macOS Finder tags. Each button toggles its
--- tag on the current file, so a video can carry several. A ✓ marks tags it has.
--- Delete moves the file to Trash after skip or when the video ends.
+-- Green / Yellow / Red / custom names are macOS Finder tags. Each button toggles its
+-- tag on the current file, so a file can carry several. A ✓ marks tags it has.
+-- Delete moves the file to Trash after skip or when the file ends.
 
 -- VLC copies extension callbacks into another environment; top-level locals
 -- are often nil inside activate/input_changed. Keep shared state global.
@@ -20,7 +20,7 @@
 SUPPORT = nil
 FINDER_SCRIPT = nil
 PALETTE_FILE = nil
-BUILTIN_TAGS = { "Green", "Red" }
+BUILTIN_TAGS = { "Green", "Yellow", "Red" }
 NEAR_END = 0.98
 
 dlg = nil
@@ -41,9 +41,9 @@ function descriptor()
         version = "1.1",
         author = "Glen Pridgen",
         url = "https://github.com/qubestream/vlc-video-tags",
-        shortdesc = "Tag videos with Finder tags or send them to Trash",
-        description = "Floating palette: Green, Red, Delete, plus tags you add. "
-            .. "Each button toggles its tag, so a video can have several. Delete trashes the file when you skip or the video ends.",
+        shortdesc = "Tag videos and audio with Finder tags or send them to Trash",
+        description = "Floating palette: Green, Yellow, Red, Delete, plus tags you add. "
+            .. "Each button toggles its tag, so a file can have several. Delete trashes the file when you skip or it ends.",
         capabilities = { "input-listener", "playing-listener" }
     }
 end
@@ -104,6 +104,10 @@ end
 
 function click_green()
     on_tag("Green")
+end
+
+function click_yellow()
+    on_tag("Yellow")
 end
 
 function click_red()
@@ -168,10 +172,11 @@ function create_dialog()
     status_label = dlg:add_label(status_text(), 1, 2, 3, 1)
     tag_buttons = {}
     tag_buttons["Green"] = dlg:add_button(button_label("Green"), click_green, 1, 3, 1, 1)
-    tag_buttons["Red"] = dlg:add_button(button_label("Red"), click_red, 2, 3, 1, 1)
-    dlg:add_button("Delete", click_delete, 3, 3, 1, 1)
+    tag_buttons["Yellow"] = dlg:add_button(button_label("Yellow"), click_yellow, 2, 3, 1, 1)
+    tag_buttons["Red"] = dlg:add_button(button_label("Red"), click_red, 3, 3, 1, 1)
+    dlg:add_button("Delete", click_delete, 1, 4, 3, 1)
 
-    local row = 4
+    local row = 5
     local col = 1
     for i = 1, #custom_tags do
         local name = custom_tags[i]
@@ -252,7 +257,7 @@ end
 
 function status_text()
     if current_choice == "Delete" then
-        return "Will delete when this video ends or you skip"
+        return "Will delete when this file ends or you skip"
     end
     if #current_tags > 0 then
         return "Tags: " .. table.concat(current_tags, ", ")
@@ -372,7 +377,7 @@ function on_delete()
     current_choice = "Delete"
     current_tags = {}
     refresh_labels()
-    osd("Will delete when this video ends or you skip")
+    osd("Will delete when this file ends or you skip")
 end
 
 function flush_pending_delete()
@@ -413,7 +418,7 @@ function require_local_path()
         if playing then
             return nil, "Tags apply to local files only"
         end
-        return nil, "No video playing"
+        return nil, "Nothing playing"
     end
     return current_path
 end
@@ -461,7 +466,7 @@ function finder_run(cmd, ...)
 end
 
 function palette_names()
-    local names = { "Green", "Red" }
+    local names = { "Green", "Yellow", "Red" }
     for i = 1, #custom_tags do
         names[#names + 1] = custom_tags[i]
     end
