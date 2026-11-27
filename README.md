@@ -73,6 +73,7 @@ Clicking Green, Yellow, Red, or a custom tag cancels a pending delete. Delete re
 - **Drag to seek.** The progress bar under the title shows elapsed and total time. Drag it, or click anywhere on it, to move through the file; VLC follows while you drag.
 - **Audio too.** Audio files VLC plays (mp3, m4a, flac, wav and so on) can be tagged, deleted, renamed and moved just like videos.
 - **Green, Yellow, Red.** These three are built in, always sit on the top row, and are in every profile.
+- **Drag to reorder.** Click and hold a custom tag for a moment until it lifts, then drag it. A glowing line in your accent colour shows where it will land; let go to drop it there. Use it to put related tags next to each other or to give the ones you use most the low hotkeys: ⌃⌥4 to ⌃⌥9 follow the new order, and the panel tells you the tag's new hotkey. Green, Yellow and Red stay on the top row and cannot be dragged; dropping above the grid puts a tag first. Each profile keeps its own order, and the VLC extension shows the same order. Let go where it started to cancel. A quick click still toggles the tag as before.
 - **Rename.** The Rename button sits to the right of Delete. It opens a box with the current name filled in; the extension stays as it is. The new name is applied when you skip, the video ends, or you quit VLC, never while it plays. If a tag will also move the video, the panel renames it first and then moves it, so it lands in the folder under its new name. Delete wins over both. Click Rename again and choose **Keep Original Name** to cancel. A name that is already taken in that folder is refused. Undo in the footer puts back the old name and folder. Tags and comments stay with the file.
 
 It reads the playing file through VLC's AppleScript dictionary and sets tags and Trash with Foundation. Comments go through Finder, because Get Info reads them from Finder's own `.DS_Store` and not only from the Spotlight attribute, so the first save asks once whether Video Tags Panel may control Finder. If you say no, comments still reach Spotlight (`kMDItemFinderComment`) but not Get Info.
@@ -127,6 +128,7 @@ Copyright (C) 2026 Glen Pridgen.
 ./tests/test_extension_shape.sh
 python3 tests/test_uri_to_path.py
 ./tests/test_finder_ops.sh
+./tests/test_tag_order.sh     # drag-to-reorder logic (needs swiftc)
 ./tests/test_toggle_flow.sh   # needs lua (brew install lua)
 ```
 
