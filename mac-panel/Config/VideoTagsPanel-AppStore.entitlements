@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mac App Store build. See mac-panel/APP_STORE.md for what each line is for
+	     and which ones App Review is likely to question. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- VLC's web interface on 127.0.0.1 (playback remote). -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<!-- VLC's AppleScript dictionary has no access groups, so scripting-targets
+	     cannot be used; a temporary exception is the only way to reach it.
+	     Finder is only for Get Info comments. -->
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>org.videolan.vlc</string>
+		<string>com.apple.finder</string>
+	</array>
+	<!-- Tagging and trashing the playing file. Movies folder is covered by an
+	     entitlement; anywhere else needs the user to grant the folder. -->
+	<key>com.apple.security.assets.movies.read-write</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
+	<!-- Shared palette with the Lua extension, and VLC's vlcrc for the
+	     one-time web-interface setup. -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Library/Application Support/org.videolan.vlc/</string>
+		<string>/Library/Preferences/org.videolan.vlc/</string>
+	</array>
+</dict>
+</plist>

@@ -20,9 +20,9 @@
 //     - Undo for the last Trash
 //     - a Comments box that edits the file's Finder Get Info comment and saves
 //       itself when you skip, pause, or quit (⌃⌥C jumps to it)
-//     - starts on its own; no "VLC → Extensions" step every launch
+//     - a normal app: Dock icon, app menu, ⌘Q; optional Open at Login
 //
-// Build: ./build.sh (swiftc from Xcode or the Command Line Tools). macOS 14+.
+// Build: open VideoTagsPanel.xcodeproj in Xcode, or run ./build.sh. macOS 14+.
 
 import AppKit
 import Carbon.HIToolbox
@@ -34,8 +34,18 @@ import SwiftUI
 enum Paths {
     static let vlcBundleID = "org.videolan.vlc"
 
+    /// The user's real home folder. Inside the App Sandbox, NSHomeDirectory()
+    /// and homeDirectoryForCurrentUser point at the app's container instead,
+    /// where VLC's files are not.
+    static let realHome: URL = {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }()
+
     static var support: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        realHome
             .appendingPathComponent("Library/Application Support/org.videolan.vlc", isDirectory: true)
     }
 
@@ -407,7 +417,7 @@ enum VLCPrefs {
     static let defaultPort = 9842
 
     static var vlcrc: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        Paths.realHome
             .appendingPathComponent("Library/Preferences/org.videolan.vlc/vlcrc")
     }
 
@@ -1505,7 +1515,7 @@ final class FloatingPanel: NSPanel {
 // MARK: - App
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var model: PanelModel!
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem!
@@ -1516,27 +1526,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         installHotKeys()
         model.start()
+        installMainMenu()
         panel.orderFrontRegardless()
-        enableLoginItemOnFirstInstalledLaunch()
+        undoAutomaticLoginItem()
     }
 
-    // MARK: Open at Login (SMAppService, macOS 13+)
+    // MARK: Open at Login (SMAppService, macOS 13+). Off unless the user turns it on.
 
-    private var isInstalled: Bool {
-        let path = Bundle.main.bundlePath
-        return path.hasPrefix("/Applications/") || path.hasPrefix(NSHomeDirectory() + "/Applications/")
-    }
-
-    /// The first launch from an Applications folder turns on Open at Login once.
-    /// After that the menu toggle is the only thing that changes it.
-    private func enableLoginItemOnFirstInstalledLaunch() {
-        let key = "didSetUpLoginItem"
-        guard isInstalled, !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
-        try? SMAppService.mainApp.register()
+    /// Builds before 1.5 turned Open at Login on by themselves on first launch.
+    /// Turn that off once, so it is only ever on when the user chose it.
+    private func undoAutomaticLoginItem() {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "didSetUpLoginItem"), !defaults.bool(forKey: "loginItemIsOptIn") else { return }
+        defaults.set(true, forKey: "loginItemIsOptIn")
+        if SMAppService.mainApp.status == .enabled {
+            try? SMAppService.mainApp.unregister()
+        }
     }
 
     @objc private func toggleLoginItem(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(true, forKey: "loginItemIsOptIn")
         do {
             if SMAppService.mainApp.status == .enabled {
                 try SMAppService.mainApp.unregister()
@@ -1546,7 +1555,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             NSLog("Video Tags Panel: login item change failed: \(error.localizedDescription)")
         }
-        sender.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    // Keeps every "Open at Login" item (app menu and menu-bar menu) in step.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleLoginItem(_:)) {
+            item.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        } else if item.action == #selector(togglePanel) {
+            item.title = panel.isVisible ? "Hide Tags Panel" : "Show Tags Panel"
+        }
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false   // closing the panel keeps the app running; the Dock icon brings it back
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -1646,10 +1668,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
         login.target = self
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
         menu.addItem(withTitle: "Quit Video Tags Panel", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
+    }
+
+    /// Standard app menus, so the app has About, ⌘Q, ⌘H and a working Edit
+    /// menu (⌘C/⌘V/⌘A in the Comments box need it).
+    private func installMainMenu() {
+        let name = "Video Tags Panel"
+        let main = NSMenu()
+
+        let appMenu = NSMenu(title: name)
+        appMenu.addItem(withTitle: "About \(name)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
+        login.target = self
+        appMenu.addItem(login)
+        appMenu.addItem(.separator())
+        let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        services.submenu = NSMenu(title: "Services")
+        NSApp.servicesMenu = services.submenu
+        appMenu.addItem(services)
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide \(name)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+            .keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit \(name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        main.addItem(withTitle: name, action: nil, keyEquivalent: "").submenu = appMenu
+
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        main.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
+
+        let window = NSMenu(title: "Window")
+        window.addItem(withTitle: "Show Tags Panel", action: #selector(togglePanel), keyEquivalent: "1").target = self
+        window.addItem(.separator())
+        window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        main.addItem(withTitle: "Window", action: nil, keyEquivalent: "").submenu = window
+        NSApp.windowsMenu = window
+
+        NSApp.mainMenu = main
     }
 
     @objc private func togglePanel() {
@@ -1664,7 +1732,7 @@ enum VideoTagsPanelApp {
         let app = NSApplication.shared
         let delegate = AppDelegate()   // NSApplication.delegate is weak; run() keeps this frame alive
         app.delegate = delegate
-        app.setActivationPolicy(.accessory)   // no Dock icon; lives in the menu bar
+        app.setActivationPolicy(.regular)   // a normal app: Dock icon and app menu, plus the menu-bar item
         app.run()
     }
 }
