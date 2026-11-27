@@ -13,6 +13,7 @@ Tested on macOS 27 with a sandboxed probe signed with these exact entitlements.
 | Tagging and trashing videos in `~/Movies` | Works | `assets.movies.read-write` | Low |
 | Tagging and trashing videos anywhere else (Downloads, Desktop, external drives) | **Blocked** | The user must grant each folder once (open panel), kept with security-scoped bookmarks. Not built yet. | Low once built |
 | Tag actions (move a video to a chosen folder) | **Blocked** for folders outside `~/Movies` after a relaunch | Store the chosen folder as a security-scoped bookmark instead of a path. Not built yet. | Low once built |
+| Rename (in the same folder, then any tag move) | Same as tagging: works in `~/Movies`, **blocked** elsewhere until folder bookmarks are built | `assets.movies.read-write`, plus bookmarks for other folders | Low once built |
 | Shared tag palette with the Lua extension, and the one-time speed setup that edits `vlcrc` | Works | `temporary-exception.files.home-relative-path.read-write` for VLC's two folders | **High.** Could be replaced by asking the user to pick the folder once. |
 | Speed and seek over VLC's web interface on 127.0.0.1 | Works | `network.client` | Low |
 | Global hotkeys (⌃⌥…) | Works | none (Carbon hot keys are allowed) | Low |

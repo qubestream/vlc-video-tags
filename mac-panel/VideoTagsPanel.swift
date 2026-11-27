@@ -196,6 +196,39 @@ enum NamePrompt {
         return field.stringValue
     }
 
+    /// Asks for a new file name. Only the name is editable; the extension is
+    /// shown beside the field and always kept.
+    enum RenameChoice { case rename(String), keepName, cancel }
+
+    static func rename(stem: String, ext: String, pending: Bool) -> RenameChoice {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "Rename Video"
+        alert.informativeText = "The file is renamed when this video ends or you skip, before any Move. Tags and comments stay with it."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        if pending { alert.addButton(withTitle: "Keep Original Name") }
+        let field = NSTextField(string: stem)
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: ext.isEmpty ? 280 : 236).isActive = true
+        let row = NSStackView(views: [field])
+        row.orientation = .horizontal
+        row.spacing = 4
+        if !ext.isEmpty {
+            let suffix = NSTextField(labelWithString: ".\(ext)")
+            suffix.textColor = .secondaryLabelColor
+            row.addArrangedSubview(suffix)
+        }
+        row.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = row
+        alert.window.initialFirstResponder = field
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .rename(field.stringValue)
+        case .alertThirdButtonReturn: return .keepName
+        default: return .cancel
+        }
+    }
+
     static func confirm(title: String, message: String, button: String) -> Bool {
         NSApp.activate()
         let alert = NSAlert()
@@ -243,7 +276,10 @@ enum FinderTags {
 
     /// Moves the file into `folder`, adding " 2", " 3"… if the name is taken.
     /// Finder tags and the comment xattr travel with the file.
-    static func move(_ path: String, into folder: String) throws -> URL {
+    /// Moves a file into `folder`, optionally under a new name, in one step.
+    /// A name already taken there gets " 2", " 3"… (a case-only rename in
+    /// the same folder is not a clash).
+    static func move(_ path: String, into folder: String, named newName: String? = nil) throws -> URL {
         let source = URL(fileURLWithPath: path)
         let dir = URL(fileURLWithPath: folder, isDirectory: true)
         var isDir: ObjCBool = false
@@ -251,11 +287,13 @@ enum FinderTags {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: folder,
                 NSLocalizedDescriptionKey: "The folder \(dir.lastPathComponent) isn't there (is the drive connected?)"])
         }
-        let base = source.deletingPathExtension().lastPathComponent
-        let ext = source.pathExtension
-        var target = dir.appendingPathComponent(source.lastPathComponent)
+        let name = newName ?? source.lastPathComponent
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        var target = dir.appendingPathComponent(name)
         var n = 2
-        while FileManager.default.fileExists(atPath: target.path) {
+        while FileManager.default.fileExists(atPath: target.path),
+              target.path.lowercased() != source.path.lowercased() {
             let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
             target = dir.appendingPathComponent(name)
             n += 1
@@ -732,6 +770,12 @@ final class PanelModel: ObservableObject {
         var folderName: String { (folder as NSString).lastPathComponent }
     }
 
+    /// A new name for a video: applied when you move on, before any Move.
+    struct PendingRename: Equatable {
+        let path: String
+        let name: String      // full file name, extension included
+    }
+
     @Published private(set) var connection: Connection = .vlcNotRunning
     @Published private(set) var currentPath: String?
     @Published private(set) var tags: [String] = []           // palette tags on the current file
@@ -744,6 +788,7 @@ final class PanelModel: ObservableObject {
     @Published private(set) var message: String?
     @Published private(set) var lastMove: LastMove?
     @Published private(set) var pendingMove: PendingMove?
+    @Published private(set) var pendingRename: PendingRename?
     @Published private(set) var speedStatus: SpeedStatus = .off
     @Published private(set) var rate: Double = 1
     @Published var showSpeedSetup = false
@@ -756,6 +801,7 @@ final class PanelModel: ObservableObject {
     var fileName: String? { currentPath.map { ($0 as NSString).lastPathComponent } }
     var pendingIsCurrent: Bool { pendingDelete != nil && pendingDelete == currentPath }
     var pendingMoveIsCurrent: Bool { pendingMove != nil && pendingMove?.path == currentPath }
+    var pendingRenameIsCurrent: Bool { pendingRename != nil && pendingRename?.path == currentPath }
 
     /// The folder a tag moves videos to, in the active profile.
     func moveFolder(for tag: String) -> String? {
@@ -808,7 +854,16 @@ final class PanelModel: ObservableObject {
 
         switch vlc.snapshot() {
         case .failure(.notRunning):
-            // Quitting VLC with a pending delete leaves the file, same as the Lua extension.
+            // Quitting VLC applies a pending Rename and Move. A pending Delete
+            // leaves the file exactly as it is, same as the Lua extension.
+            if connection != .vlcNotRunning {
+                saveComment()
+                if pendingDelete != nil {
+                    pendingDelete = nil; pendingRename = nil; pendingMove = nil
+                } else {
+                    flushFileActions()
+                }
+            }
             connection = .vlcNotRunning
             setCurrent(nil)
             playing = false
@@ -828,20 +883,14 @@ final class PanelModel: ObservableObject {
         // Save the comment before anything moves: on skip, and when playback pauses.
         if now.path != currentPath || (playing && !now.playing) { saveComment() }
 
-        // A different file started: flush the pending delete (skip).
-        if let pending = pendingDelete, let next = now.path, next != pending {
-            flushPendingDelete()
-        }
-        // The playlist ran out right after the marked file reached its end.
-        if let pending = pendingDelete, now.path == nil, pending == currentPath, lastProgress >= Rules.nearEnd {
-            flushPendingDelete()
-        }
-        // Same timing for a tag's Move to Folder action.
-        if let move = pendingMove, let next = now.path, next != move.path {
-            flushPendingMove()
-        }
-        if let move = pendingMove, now.path == nil, move.path == currentPath, lastProgress >= Rules.nearEnd {
-            flushPendingMove()
+        // Delete, Rename and Move wait for the video to be done with: a
+        // different file started (skip), or the playlist ran out right after
+        // the marked file reached its end.
+        let pendingPath = pendingDelete ?? pendingRename?.path ?? pendingMove?.path
+        if let pending = pendingPath {
+            let skipped = now.path != nil && now.path != pending
+            let ended = now.path == nil && pending == currentPath && lastProgress >= Rules.nearEnd
+            if skipped || ended { flushFileActions() }
         }
 
         connection = now.path != nil ? .playing : (now.isStream ? .stream : .nothingPlaying)
@@ -1059,8 +1108,9 @@ final class PanelModel: ObservableObject {
             pendingDelete = nil
             flash("Delete cancelled")
         } else {
+            // A pending Rename or Move is kept: Delete wins when you move on,
+            // and cancelling Delete brings them back.
             pendingDelete = path
-            if pendingMove?.path == path { pendingMove = nil }
             flash("Will move to Trash when this video ends or you skip")
         }
     }
@@ -1126,30 +1176,45 @@ final class PanelModel: ObservableObject {
 
     // MARK: Internals
 
-    private func flushPendingDelete() {
-        guard let path = pendingDelete else { return }
-        pendingDelete = nil
+    /// Runs what is pending for the video you just left, in this order:
+    /// Delete wins outright; otherwise Rename then Move, as one step, so the
+    /// file lands in the Move folder under its new name.
+    private func flushFileActions() {
+        let delete = pendingDelete, rename = pendingRename, move = pendingMove
+        pendingDelete = nil; pendingRename = nil; pendingMove = nil
         comments.drain()   // a comment save for this file is queued just before
-        try? FinderTags.clear(path, palette: palette)
-        do {
-            if let trashed = try FinderTags.trash(path) { offerUndo(path, trashed) }
-            flash("Moved \((path as NSString).lastPathComponent) to Trash")
-        } catch {
-            flash("Could not move to Trash: \(error.localizedDescription)")
-        }
-    }
 
-    private func flushPendingMove() {
-        guard let move = pendingMove else { return }
-        pendingMove = nil
-        comments.drain()   // a comment save for this file is queued just before
-        let name = (move.path as NSString).lastPathComponent
+        if let path = delete {
+            try? FinderTags.clear(path, palette: palette)
+            do {
+                if let trashed = try FinderTags.trash(path) { offerUndo(path, trashed) }
+                flash("Moved \((path as NSString).lastPathComponent) to Trash")
+            } catch {
+                flash("Could not move to Trash: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        // Rename and Move belong to the same file unless a skip raced a mark.
+        guard let path = rename?.path ?? move?.path else { return }
+        let newName = rename?.path == path ? rename?.name : nil
+        let folder = move?.path == path ? move?.folder : nil
+        let oldName = (path as NSString).lastPathComponent
+        let dir = folder ?? (path as NSString).deletingLastPathComponent
         do {
-            let moved = try FinderTags.move(move.path, into: move.folder)
-            offerUndo(move.path, moved)
-            flash("Moved \(name) to \(move.folderName)")
+            let moved = try FinderTags.move(path, into: dir, named: newName)
+            offerUndo(path, moved)
+            let finalName = moved.lastPathComponent
+            switch (newName, folder) {
+            case (_?, let folder?):
+                flash("Renamed to \(finalName) and moved to \((folder as NSString).lastPathComponent)")
+            case (_?, nil):
+                flash("Renamed \(oldName) to \(finalName)")
+            default:
+                flash("Moved \(oldName) to \(move?.folderName ?? "")")
+            }
         } catch {
-            flash("Could not move \(name): \(error.localizedDescription)")
+            flash("Could not \(newName != nil ? "rename" : "move") \(oldName): \(error.localizedDescription)")
         }
     }
 
@@ -1160,6 +1225,43 @@ final class PanelModel: ObservableObject {
             try? await Task.sleep(for: .seconds(Rules.undoWindow))
             if self?.lastMove?.at == entry.at { self?.lastMove = nil }
         }
+    }
+
+    /// Sets the name the current video gets when you move on (extension
+    /// kept). Giving it back its own name cancels the rename.
+    func setPendingRename(_ raw: String) {
+        guard let path = requireFile() else { return }
+        let stem = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stem.isEmpty, !stem.hasPrefix("."), !stem.contains("/"), !stem.contains(":") else {
+            flash("A name can't be empty, start with a dot, or contain / or :")
+            return
+        }
+        let source = URL(fileURLWithPath: path)
+        let ext = source.pathExtension
+        let newName = ext.isEmpty ? stem : "\(stem).\(ext)"
+        if newName == source.lastPathComponent {
+            cancelPendingRename()
+            return
+        }
+        // Check the folder it will land in now; at move-on time a late
+        // clash gets " 2" instead of overwriting anything.
+        let folders = [source.deletingLastPathComponent().path] + (pendingMoveIsCurrent ? [pendingMove!.folder] : [])
+        for folder in folders {
+            let target = URL(fileURLWithPath: folder).appendingPathComponent(newName)
+            let caseOnly = target.path.lowercased() == path.lowercased()
+            if !caseOnly, FileManager.default.fileExists(atPath: target.path) {
+                flash("There's already a file named \(newName) in \((folder as NSString).lastPathComponent)")
+                return
+            }
+        }
+        pendingRename = PendingRename(path: path, name: newName)
+        flash("Renames to \(newName) when this video ends or you skip")
+    }
+
+    func cancelPendingRename() {
+        guard pendingRenameIsCurrent else { return }
+        pendingRename = nil
+        flash("Rename cancelled")
     }
 
     private func requireFile() -> String? {
@@ -1356,7 +1458,10 @@ struct PanelView: View {
             } else {
                 profileBar
                 tagGrid
-                deleteButton
+                HStack(spacing: 8) {
+                    deleteButton
+                    renameButton
+                }
                 addRow
             }
             footer
@@ -1371,6 +1476,7 @@ struct PanelView: View {
         .animation(.snappy(duration: 0.18), value: model.tags)
         .animation(.snappy(duration: 0.18), value: model.pendingDelete)
         .animation(.snappy(duration: 0.18), value: model.pendingMove)
+        .animation(.snappy(duration: 0.18), value: model.pendingRename)
         .onChange(of: model.commentFocusRequest) { commentFocused = true }
         .onChange(of: commentFocused) { _, focused in
             if !focused { model.saveComment() }
@@ -1668,14 +1774,57 @@ struct PanelView: View {
         model.setMoveFolder(url.path, for: tag)
     }
 
+    private var renameButton: some View {
+        let pending = model.pendingRenameIsCurrent
+        return Button(action: promptRename) {
+            HStack {
+                Image(systemName: pending ? "pencil.circle.fill" : "pencil")
+                Text(pending ? "Renaming" : "Rename")
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(pending ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(pending ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.18), lineWidth: 1.5)
+            )
+            .foregroundStyle(pending ? Color.accentColor : Color.primary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.currentPath == nil)
+        .opacity(model.currentPath == nil ? 0.55 : 1)
+        .help(pending ? "Change or cancel the new name" : "Rename the file when this video ends or you skip")
+    }
+
+    private func promptRename() {
+        guard let path = model.currentPath else { return }
+        let url = URL(fileURLWithPath: path)
+        let current = model.pendingRenameIsCurrent ? model.pendingRename!.name : url.lastPathComponent
+        let ext = url.pathExtension
+        let stem = ext.isEmpty ? current : (current as NSString).deletingPathExtension
+        switch NamePrompt.rename(stem: stem, ext: ext, pending: model.pendingRenameIsCurrent) {
+        case .rename(let name): model.setPendingRename(name)
+        case .keepName: model.cancelPendingRename()
+        case .cancel: break
+        }
+    }
+
     private var deleteButton: some View {
         Button {
             model.toggleDelete()
         } label: {
             HStack {
                 Image(systemName: model.pendingIsCurrent ? "trash.fill" : "trash")
-                Text(model.pendingIsCurrent ? "Trash when it ends · click to cancel" : "Delete")
-                Spacer()
+                Text(model.pendingIsCurrent ? "Trashing" : "Delete")
+                    .lineLimit(1)
+                Spacer(minLength: 0)
                 Text("\(HotKeys.modifierGlyphs)⌫").font(.caption.monospaced()).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 10)
@@ -1695,6 +1844,7 @@ struct PanelView: View {
         .buttonStyle(.plain)
         .disabled(model.currentPath == nil)
         .opacity(model.currentPath == nil ? 0.55 : 1)
+        .help(model.pendingIsCurrent ? "Click to cancel the delete" : "Move to Trash when this video ends or you skip")
     }
 
     private var addRow: some View {
@@ -1750,8 +1900,16 @@ struct PanelView: View {
         if let message = model.message { return message }
         if case .failed(let detail) = model.connection { return detail }
         if model.pendingIsCurrent { return "Will move to Trash when this video ends or you skip" }
-        if model.pendingMoveIsCurrent, let move = model.pendingMove {
+        let rename = model.pendingRenameIsCurrent ? model.pendingRename : nil
+        let move = model.pendingMoveIsCurrent ? model.pendingMove : nil
+        switch (rename, move) {
+        case let (rename?, move?):
+            return "Renames to \(rename.name), then moves to \(move.folderName), when this video ends or you skip"
+        case let (rename?, nil):
+            return "Renames to \(rename.name) when this video ends or you skip"
+        case let (nil, move?):
             return "Moves to \(move.folderName) when this video ends or you skip"
+        default: break
         }
         if model.currentPath == nil { return "Right-click a tag to give it a folder or remove it" }
         return model.tags.isEmpty ? "No tags" : "Tags: " + model.tags.joined(separator: ", ")
