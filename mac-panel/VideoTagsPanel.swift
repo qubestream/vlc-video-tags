@@ -325,20 +325,32 @@ final class FinderComments: @unchecked Sendable {
     /// Serial: a save for the old video always lands before the load for the next.
     private let queue = DispatchQueue(label: "dev.qubestream.videotags.comments", qos: .userInitiated)
 
+    /// The Finder comment, plus the comment stored inside the file (ID3, MP4, WAV), if any.
+    struct Loaded { var finder: String; var embedded: String? }
+
     /// Queues the read now; `done` runs on the main thread.
-    func read(_ path: String, done: @escaping @MainActor (Result<String, Failure>) -> Void) {
+    func read(_ path: String, done: @escaping @MainActor (Result<Loaded, Failure>) -> Void) {
         queue.async {
-            let result = Self.readNow(path)
+            let result = Self.readNow(path).map { Loaded(finder: $0, embedded: EmbeddedComment.read(path)) }
             DispatchQueue.main.async { MainActor.assumeIsolated { done(result) } }
         }
     }
 
-    /// Queues the write now; `done` runs on the main thread.
-    func write(_ path: String, _ text: String, done: @escaping @MainActor (Result<Void, Failure>) -> Void) {
+    /// Queues the write now; `done` runs on the main thread. `stripEmbedded`
+    /// also removes the comment stored inside the file.
+    func write(_ path: String, _ text: String, stripEmbedded: Bool = false,
+               done: @escaping @MainActor (Result<Void, Failure>) -> Void) {
         queue.async {
-            let result = Self.writeNow(path, text)
+            let result = Self.writeAll(path, text, stripEmbedded)
             DispatchQueue.main.async { MainActor.assumeIsolated { done(result) } }
         }
+    }
+
+    private static func writeAll(_ path: String, _ text: String, _ stripEmbedded: Bool) -> Result<Void, Failure> {
+        if stripEmbedded {
+            do { try EmbeddedComment.remove(path) } catch { return .failure(.failed("could not edit the file")) }
+        }
+        return writeNow(path, text)
     }
 
     /// Blocks until queued reads and writes finish (before Trash, and on quit).
@@ -346,8 +358,8 @@ final class FinderComments: @unchecked Sendable {
 
     /// Synchronous write for app quit.
     @discardableResult
-    func writeBlocking(_ path: String, _ text: String) -> Result<Void, Failure> {
-        queue.sync { Self.writeNow(path, text) }
+    func writeBlocking(_ path: String, _ text: String, stripEmbedded: Bool = false) -> Result<Void, Failure> {
+        queue.sync { Self.writeAll(path, text, stripEmbedded) }
     }
 
     // MARK: Implementation (runs on `queue`)
@@ -516,6 +528,7 @@ final class VLCBridge {
     enum Command {
         case playPause, next, previous
         case jump(seconds: Int)
+        case seek(seconds: Int)
 
         var source: String {
             let target = "tell application id \"org.videolan.vlc\""
@@ -531,6 +544,8 @@ final class VLCBridge {
                     set current time to t
                 end tell
                 """
+            case .seek(let seconds):
+                return "\(target) to set current time to \(max(seconds, 0))"
             }
         }
     }
@@ -545,7 +560,7 @@ final class VLCBridge {
         guard let script = commandScripts[source] ?? NSAppleScript(source: source) else {
             return .script(0, "Could not build the VLC command")
         }
-        commandScripts[source] = script
+        if case .seek = command {} else { commandScripts[source] = script }   // one script per position: don't keep them
         var error: NSDictionary?
         script.executeAndReturnError(&error)
         return error.map { Self.error(from: $0) }
@@ -784,6 +799,8 @@ final class PanelModel: ObservableObject {
     @Published private(set) var activeProfile = ProfileStore.defaultName
     @Published private(set) var pendingDelete: String?
     @Published private(set) var progress: Double = 0
+    @Published private(set) var elapsed: Double = 0                // seconds
+    @Published private(set) var duration: Double = 0               // seconds, 0 when unknown
     @Published private(set) var playing = false
     @Published private(set) var message: String?
     @Published private(set) var lastMove: LastMove?
@@ -796,6 +813,8 @@ final class PanelModel: ObservableObject {
     @Published private(set) var commentLoading = false
     @Published private(set) var commentFocusRequest = 0
     @Published private(set) var savedComment = ""
+    /// The box is showing the comment stored inside the file (no Finder comment).
+    @Published private(set) var commentFromFile = false
 
     var palette: [String] { Rules.builtins + custom }
     var fileName: String? { currentPath.map { ($0 as NSString).lastPathComponent } }
@@ -868,6 +887,8 @@ final class PanelModel: ObservableObject {
             setCurrent(nil)
             playing = false
             progress = 0
+            elapsed = 0
+            duration = 0
             rate = 1
         case .failure(.notAuthorized):
             connection = .needsPermission
@@ -897,6 +918,8 @@ final class PanelModel: ObservableObject {
         setCurrent(now.path)
         playing = now.playing
         progress = now.progress
+        elapsed = now.time
+        duration = now.duration
         if now.path != nil { lastProgress = now.progress }
         refreshTags()
     }
@@ -924,9 +947,12 @@ final class PanelModel: ObservableObject {
     func saveComment() {
         guard let path = commentPath, comment != savedComment else { return }
         let text = comment
+        // Clearing a comment that came from inside the file removes it there too.
+        let strip = commentFromFile && text.isEmpty
         savedComment = text
+        commentFromFile = false
         let name = (path as NSString).lastPathComponent
-        comments.write(path, text) { [weak self] result in
+        comments.write(path, text, stripEmbedded: strip) { [weak self] result in
             switch result {
             case .success:
                 self?.flash(text.isEmpty ? "Cleared comment on \(name)" : "Saved comment to \(name)")
@@ -938,6 +964,12 @@ final class PanelModel: ObservableObject {
         }
     }
 
+    /// Empties the box and saves right away (the × button).
+    func clearComment() {
+        comment = ""
+        saveComment()
+    }
+
     /// Throws away unsaved typing and goes back to what Get Info has.
     func revertComment() {
         comment = savedComment
@@ -946,8 +978,10 @@ final class PanelModel: ObservableObject {
     /// Saves synchronously; used when the app quits.
     func saveCommentBeforeQuit() {
         guard let path = commentPath, comment != savedComment else { return }
+        let strip = commentFromFile && comment.isEmpty
         savedComment = comment
-        comments.writeBlocking(path, comment)
+        commentFromFile = false
+        comments.writeBlocking(path, comment, stripEmbedded: strip)
     }
 
     func focusComment() {
@@ -964,12 +998,17 @@ final class PanelModel: ObservableObject {
         commentPath = path
         comment = ""
         savedComment = ""
+        commentFromFile = false
         commentLoading = path != nil
         guard let path else { return }
         comments.read(path) { [weak self] result in
             guard let self, self.commentPath == path else { return }   // already moved on
             self.commentLoading = false
-            if case .success(let text) = result {
+            if case .success(let loaded) = result {
+                // Show the Finder comment; if there is none, the one inside the file.
+                let fromFile = loaded.finder.isEmpty && loaded.embedded != nil
+                let text = fromFile ? loaded.embedded ?? "" : loaded.finder
+                self.commentFromFile = fromFile
                 self.savedComment = text
                 self.comment = text
             }
@@ -983,6 +1022,17 @@ final class PanelModel: ObservableObject {
     func previousVideo() { send(.previous) }
     func jumpBack() { send(.jump(seconds: -Rules.jumpSeconds)) }
     func jumpForward() { send(.jump(seconds: Rules.jumpSeconds)) }
+
+    /// Moves playback to a point on the progress bar (0…1).
+    func seek(toFraction fraction: Double) {
+        guard duration > 0 else { return }
+        let f = min(max(fraction, 0), 1)
+        // Stop just short of the very end so VLC does not skip to the next file.
+        let seconds = min(Int((f * duration).rounded()), max(Int(duration) - 1, 0))
+        progress = f
+        elapsed = Double(seconds)
+        send(.seek(seconds: seconds))
+    }
 
     func faster() { setRate(Speed.faster(than: rate)) }
     func slower() { setRate(Speed.slower(than: rate)) }
@@ -1498,6 +1548,18 @@ struct PanelView: View {
                     .font(.caption2)
                     .foregroundStyle(model.commentDirty ? Color.accentColor : Color.secondary)
                     .lineLimit(1)
+                if !model.comment.isEmpty, !model.commentLoading {
+                    Button {
+                        model.clearComment()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(model.commentFromFile
+                          ? "Delete this comment from the file"
+                          : "Delete this comment")
+                }
             }
             TextField(
                 model.commentLoading ? "Loading…" : "What's in this file?",
@@ -1516,7 +1578,7 @@ struct PanelView: View {
                 model.revertComment()
                 model.returnFocusToVLC()
             }
-            .help("Saved to Finder's Get Info Comments when you skip, pause or press Return. ⌥Return adds a line, Esc undoes your edit. \(HotKeys.modifierGlyphs)C jumps here.")
+            .help("Saved to Finder's Get Info Comments when you skip, pause or press Return. If the comment came from inside the file, clearing it removes it from the file too. ⌥Return adds a line, Esc undoes your edit. \(HotKeys.modifierGlyphs)C jumps here.")
         }
     }
 
@@ -1524,6 +1586,7 @@ struct PanelView: View {
         if model.currentPath == nil { return "" }
         if model.commentLoading { return "Loading…" }
         if model.commentDirty { return "Saves on skip or pause" }
+        if model.commentFromFile { return "Stored in the file" }
         if !model.savedComment.isEmpty { return "Saved in Get Info" }
         return "\(HotKeys.modifierGlyphs)C to type"
     }
@@ -1638,10 +1701,13 @@ struct PanelView: View {
                     .help(model.currentPath ?? "")
             }
             if model.currentPath != nil {
-                ProgressView(value: model.progress)
-                    .progressViewStyle(.linear)
-                    .tint(model.pendingIsCurrent ? .red : .accentColor)
-                    .controlSize(.mini)
+                ScrubBar(
+                    progress: model.progress,
+                    elapsed: model.elapsed,
+                    duration: model.duration,
+                    tint: model.pendingIsCurrent ? .red : .accentColor,
+                    seek: { model.seek(toFraction: $0) }
+                )
             }
         }
     }
@@ -1976,6 +2042,88 @@ enum DeleteStyle {
     static let fill = dynamic(light: rgb(255, 214, 168), dark: rgb(255, 158, 64, 0.30))
     static let outline = dynamic(light: rgb(246, 163, 88), dark: rgb(255, 178, 102))
     static let text = dynamic(light: rgb(122, 56, 0), dark: rgb(255, 208, 156))
+}
+
+/// The progress bar under the title. Drag or click anywhere on it to move
+/// through the file; VLC follows while you drag.
+struct ScrubBar: View {
+    let progress: Double
+    let elapsed: Double
+    let duration: Double
+    let tint: Color
+    let seek: (Double) -> Void
+
+    @State private var dragFraction: Double?
+    @State private var lastSent = Date.distantPast
+    @State private var hovering = false
+
+    private var shown: Double { dragFraction ?? progress }
+    private var active: Bool { hovering || dragFraction != nil }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            GeometryReader { geo in
+                let width = max(geo.size.width, 1)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.12))
+                        .frame(height: active ? 6 : 4)
+                    Capsule().fill(tint)
+                        .frame(width: width * shown, height: active ? 6 : 4)
+                    Circle()
+                        .fill(Color.white)
+                        .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
+                        .frame(width: 12, height: 12)
+                        .offset(x: width * shown - 6)
+                        .opacity(active ? 1 : 0)
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let f = min(max(value.location.x / width, 0), 1)
+                            dragFraction = f
+                            // Follow along while dragging, a few times a second.
+                            if Date().timeIntervalSince(lastSent) > 0.15 {
+                                lastSent = Date()
+                                seek(f)
+                            }
+                        }
+                        .onEnded { value in
+                            let f = min(max(value.location.x / width, 0), 1)
+                            seek(f)
+                            dragFraction = nil
+                        }
+                )
+            }
+            .frame(height: 14)
+            .onHover { hovering = $0 }
+            .disabled(duration <= 0)
+            HStack {
+                Text(Self.clock(dragFraction.map { $0 * duration } ?? elapsed))
+                Spacer()
+                Text(duration > 0 ? Self.clock(duration) : "")
+            }
+            .font(.system(size: 10).monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .animation(.easeOut(duration: 0.12), value: active)
+        .help("Drag to move through the file")
+        .accessibilityElement()
+        .accessibilityLabel("Playback position")
+        .accessibilityValue("\(Self.clock(elapsed)) of \(Self.clock(duration))")
+        .accessibilityAdjustableAction { direction in
+            guard duration > 0 else { return }
+            let step = 10 / duration
+            seek(direction == .increment ? progress + step : progress - step)
+        }
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        let s = max(Int(seconds.rounded()), 0)
+        let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
+    }
 }
 
 struct TagChip: View {
