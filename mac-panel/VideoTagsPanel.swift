@@ -11,7 +11,7 @@
 // What it does
 //   Watches the file VLC is playing (over VLC's AppleScript dictionary) and
 //   shows a small always-on-top panel to toggle Finder tags on it, or mark it
-//   for Trash when you skip or the video ends. Same palette file and same
+//   for Trash when you skip or the file ends. Same palette file and same
 //   semantics as the Lua extension (1.1), plus what Lua cannot do:
 //     - global hotkeys: ⌃⌥1…⌃⌥9 toggle palette tag N, ⌃⌥⌫ marks/unmarks Delete
 //     - playback remote: previous / next video, play-pause, ±5 s, speed
@@ -58,7 +58,7 @@ enum Paths {
 }
 
 enum Rules {
-    static let builtins = ["Green", "Red"]
+    static let builtins = ["Green", "Yellow", "Red"]
     static let nearEnd = 0.98
     static let maxTagLength = 40
     static let pollInterval: TimeInterval = 1.0
@@ -203,8 +203,8 @@ enum NamePrompt {
     static func rename(stem: String, ext: String, pending: Bool) -> RenameChoice {
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = "Rename Video"
-        alert.informativeText = "The file is renamed when this video ends or you skip, before any Move. Tags and comments stay with it."
+        alert.messageText = "Rename File"
+        alert.informativeText = "The file is renamed when this file ends or you skip, before any Move. Tags and comments stay with it."
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         if pending { alert.addButton(withTitle: "Keep Original Name") }
@@ -951,7 +951,7 @@ final class PanelModel: ObservableObject {
     }
 
     func focusComment() {
-        guard currentPath != nil else { flash("No video playing"); return }
+        guard currentPath != nil else { flash("Nothing playing"); return }
         commentFocusRequest += 1
     }
 
@@ -1111,7 +1111,7 @@ final class PanelModel: ObservableObject {
             // A pending Rename or Move is kept: Delete wins when you move on,
             // and cancelling Delete brings them back.
             pendingDelete = path
-            flash("Will move to Trash when this video ends or you skip")
+            flash("Will move to Trash when this file ends or you skip")
         }
     }
 
@@ -1157,9 +1157,9 @@ final class PanelModel: ObservableObject {
         }
         guard !quiet else { return }
         if let folder {
-            flash("\(tag) now moves videos to \((folder as NSString).lastPathComponent)")
+            flash("\(tag) now moves files to \((folder as NSString).lastPathComponent)")
         } else {
-            flash("\(tag) no longer moves videos")
+            flash("\(tag) no longer moves files")
         }
     }
 
@@ -1255,7 +1255,7 @@ final class PanelModel: ObservableObject {
             }
         }
         pendingRename = PendingRename(path: path, name: newName)
-        flash("Renames to \(newName) when this video ends or you skip")
+        flash("Renames to \(newName) when this file ends or you skip")
     }
 
     func cancelPendingRename() {
@@ -1269,7 +1269,7 @@ final class PanelModel: ObservableObject {
         switch connection {
         case .stream: flash("Tags apply to local files only")
         case .vlcNotRunning: flash("VLC is not running")
-        default: flash("No video playing")
+        default: flash("Nothing playing")
         }
         return nil
     }
@@ -1500,7 +1500,7 @@ struct PanelView: View {
                     .lineLimit(1)
             }
             TextField(
-                model.commentLoading ? "Loading…" : "What's in this video?",
+                model.commentLoading ? "Loading…" : "What's in this file?",
                 text: $model.comment,
                 axis: .vertical
             )
@@ -1532,7 +1532,7 @@ struct PanelView: View {
 
     private var transportBar: some View {
         HStack(spacing: 2) {
-            TransportButton(symbol: "backward.end.fill", help: "Previous video  ⌃⌥←") { model.previousVideo() }
+            TransportButton(symbol: "backward.end.fill", help: "Previous  ⌃⌥←") { model.previousVideo() }
             TransportButton(symbol: "gobackward.5", help: "Back \(Rules.jumpSeconds) seconds") { model.jumpBack() }
             TransportButton(
                 symbol: model.playing ? "pause.fill" : "play.fill",
@@ -1540,7 +1540,7 @@ struct PanelView: View {
                 prominent: true
             ) { model.playPause() }
             TransportButton(symbol: "goforward.5", help: "Forward \(Rules.jumpSeconds) seconds") { model.jumpForward() }
-            TransportButton(symbol: "forward.end.fill", help: "Next video  ⌃⌥→") { model.nextVideo() }
+            TransportButton(symbol: "forward.end.fill", help: "Next  ⌃⌥→") { model.nextVideo() }
             Spacer(minLength: 8)
             speedControl
         }
@@ -1722,40 +1722,56 @@ struct PanelView: View {
     private func deleteProfile() {
         let name = model.activeProfile
         guard NamePrompt.confirm(title: "Delete the \(name) profile?",
-                                 message: "Its tag buttons go away. Videos you already tagged keep their tags.",
+                                 message: "Its tag buttons go away. Files you already tagged keep their tags.",
                                  button: "Delete") else { return }
         model.deleteProfile(name)
     }
 
     // Tags
 
+    /// Green, Yellow and Red always share the top row; custom tags follow.
     private var tagGrid: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-            ForEach(Array(model.palette.enumerated()), id: \.element) { index, name in
-                TagChip(
-                    name: name,
-                    hotkey: index < HotKeys.digitKeys.count ? "\(HotKeys.modifierGlyphs)\(index + 1)" : nil,
-                    isOn: model.tags.containsIgnoringCase(name),
-                    enabled: model.currentPath != nil,
-                    moveFolder: model.moveFolder(for: name),
-                    movePending: model.pendingMoveIsCurrent && model.pendingMove?.tag.caseInsensitiveCompare(name) == .orderedSame
-                ) {
-                    model.toggle(name)
+        let builtins = Array(model.palette.prefix(Rules.builtins.count))
+        let custom = Array(model.palette.dropFirst(Rules.builtins.count).enumerated())
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(Array(builtins.enumerated()), id: \.element) { index, name in
+                    tagChip(name, index: index)
                 }
-                .contextMenu {
-                    if let folder = model.moveFolder(for: name) {
-                        Button("Change Folder for “\(name)”…") { chooseFolder(for: name) }
-                        Button("Stop Moving “\(name)” Videos to \((folder as NSString).lastPathComponent)") {
-                            model.setMoveFolder(nil, for: name)
-                        }
-                    } else {
-                        Button("Move “\(name)” Videos to a Folder…") { chooseFolder(for: name) }
-                    }
-                    if !Rules.isBuiltin(name) {
-                        Divider()
-                        Button("Remove “\(name)” from palette", role: .destructive) { model.remove(name) }
+            }
+            if !custom.isEmpty {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                    ForEach(custom, id: \.element) { offset, name in
+                        tagChip(name, index: Rules.builtins.count + offset)
                     }
                 }
+            }
+        }
+    }
+
+    private func tagChip(_ name: String, index: Int) -> some View {
+        TagChip(
+            name: name,
+            hotkey: index < HotKeys.digitKeys.count ? "\(HotKeys.modifierGlyphs)\(index + 1)" : nil,
+            isOn: model.tags.containsIgnoringCase(name),
+            enabled: model.currentPath != nil,
+            moveFolder: model.moveFolder(for: name),
+            movePending: model.pendingMoveIsCurrent && model.pendingMove?.tag.caseInsensitiveCompare(name) == .orderedSame
+        ) {
+            model.toggle(name)
+        }
+        .contextMenu {
+            if let folder = model.moveFolder(for: name) {
+                Button("Change Folder for “\(name)”…") { chooseFolder(for: name) }
+                Button("Stop Moving “\(name)” Files to \((folder as NSString).lastPathComponent)") {
+                    model.setMoveFolder(nil, for: name)
+                }
+            } else {
+                Button("Move “\(name)” Files to a Folder…") { chooseFolder(for: name) }
+            }
+            if !Rules.isBuiltin(name) {
+                Divider()
+                Button("Remove “\(name)” from palette", role: .destructive) { model.remove(name) }
             }
         }
     }
@@ -1768,7 +1784,7 @@ struct PanelView: View {
         open.canCreateDirectories = true
         open.allowsMultipleSelection = false
         open.prompt = "Choose"
-        open.message = "Videos you tag “\(tag)” move to this folder when you skip or the video ends."
+        open.message = "Files you tag “\(tag)” move to this folder when you skip or the file ends."
         if let current = model.moveFolder(for: tag) { open.directoryURL = URL(fileURLWithPath: current) }
         guard open.runModal() == .OK, let url = open.url else { return }
         model.setMoveFolder(url.path, for: tag)
@@ -1800,7 +1816,7 @@ struct PanelView: View {
         .buttonStyle(.plain)
         .disabled(model.currentPath == nil)
         .opacity(model.currentPath == nil ? 0.55 : 1)
-        .help(pending ? "Change or cancel the new name" : "Rename the file when this video ends or you skip")
+        .help(pending ? "Change or cancel the new name" : "Rename the file when this file ends or you skip")
     }
 
     private func promptRename() {
@@ -1844,7 +1860,7 @@ struct PanelView: View {
         .buttonStyle(.plain)
         .disabled(model.currentPath == nil)
         .opacity(model.currentPath == nil ? 0.55 : 1)
-        .help(model.pendingIsCurrent ? "Click to cancel the delete" : "Move to Trash when this video ends or you skip")
+        .help(model.pendingIsCurrent ? "Click to cancel the delete" : "Move to Trash when this file ends or you skip")
     }
 
     private var addRow: some View {
@@ -1856,7 +1872,7 @@ struct PanelView: View {
                 Image(systemName: "plus")
             }
             .disabled(Rules.sanitize(draft) == nil)
-            .help("Add to the palette and tag the current video")
+            .help("Add to the palette and tag the current file")
         }
     }
 
@@ -1899,16 +1915,16 @@ struct PanelView: View {
     private var footerText: String {
         if let message = model.message { return message }
         if case .failed(let detail) = model.connection { return detail }
-        if model.pendingIsCurrent { return "Will move to Trash when this video ends or you skip" }
+        if model.pendingIsCurrent { return "Will move to Trash when this file ends or you skip" }
         let rename = model.pendingRenameIsCurrent ? model.pendingRename : nil
         let move = model.pendingMoveIsCurrent ? model.pendingMove : nil
         switch (rename, move) {
         case let (rename?, move?):
-            return "Renames to \(rename.name), then moves to \(move.folderName), when this video ends or you skip"
+            return "Renames to \(rename.name), then moves to \(move.folderName), when this file ends or you skip"
         case let (rename?, nil):
-            return "Renames to \(rename.name) when this video ends or you skip"
+            return "Renames to \(rename.name) when this file ends or you skip"
         case let (nil, move?):
-            return "Moves to \(move.folderName) when this video ends or you skip"
+            return "Moves to \(move.folderName) when this file ends or you skip"
         default: break
         }
         if model.currentPath == nil { return "Right-click a tag to give it a folder or remove it" }
@@ -2228,7 +2244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         profiles.submenu = makeProfilesMenu()
         menu.addItem(profiles)
         menu.addItem(.separator())
-        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 tags · P profile · ⌫ Delete · C comment · Space play · ←→ video · ↑↓ speed", action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 tags · P profile · ⌫ Delete · C comment · Space play · ←→ next/previous · ↑↓ speed", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())
