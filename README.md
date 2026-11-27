@@ -64,22 +64,23 @@ Clicking Green, Red, or a custom tag cancels a pending delete. Delete removes th
 
 - **Global hotkeys.** ⌃⌥1 to ⌃⌥9 toggle palette tag 1 to 9 (Green is 1, Red is 2, then your custom tags in order). ⌃⌥⌫ marks or unmarks the current video for Trash.
 - **Playback remote** across the top: previous video, back 5 s, play/pause, forward 5 s, next video, and speed (− 1.5× +; click the number for normal speed). Hotkeys: ⌃⌥Space play/pause, ⌃⌥← ⌃⌥→ previous/next video, ⌃⌥↑ ⌃⌥↓ faster/slower, ⌃⌥0 normal speed.
-- **Always there.** Floats above VLC, including full screen, and follows you across Spaces. No **VLC → Extensions** step each launch. It lives in the menu bar (tag icon) with no Dock icon.
+- **Always there.** Floats above VLC, including full screen, and follows you across Spaces. No **VLC → Extensions** step each launch. It is a normal Mac app: Dock icon, app menu, ⌘Q, plus a tag icon in the menu bar. **Open at Login** is off until you turn it on (app menu or menu-bar icon).
 - **Safer Delete.** Marking for Trash keeps the tags until the file is actually trashed, so unmarking loses nothing. After a trash, **Undo** shows for a few seconds.
 - **Comments that save themselves.** The box at the bottom edits the video's Finder **Get Info → Comments**. It loads the comment when a video starts and saves when you go to the next video, pause, press Return, click away, or quit. ⌃⌥C jumps to the box; Return saves and hands the keyboard back to VLC, ⌥Return adds a line, Esc undoes your edit. Spotlight indexes the comment too.
 - **Same palette.** It reads and writes the same `video-tags-palette.txt`, so buttons you add in either place show in both. Right-click a custom tag to remove it from the palette.
 
 It reads the playing file through VLC's AppleScript dictionary and sets tags and Trash with Foundation. Comments go through Finder, because Get Info reads them from Finder's own `.DS_Store` and not only from the Spotlight attribute, so the first save asks once whether Video Tags Panel may control Finder. If you say no, comments still reach Spotlight (`kMDItemFinderComment`) but not Get Info.
 
-Build (needs Xcode or the Command Line Tools, macOS 14 or later):
+Build (needs Xcode 26 or later, macOS 14 or later). Open `mac-panel/VideoTagsPanel.xcodeproj` in Xcode and press ⌘R, or from Terminal:
 
 ```bash
 cd mac-panel
-./build.sh
-open "build/Video Tags Panel.app"
+INSTALL=1 ./build.sh
 ```
 
-`INSTALL=1 ./build.sh` installs it to `/Applications` and opens it. The first launch from there turns on **Open at Login**; the menu-bar tag icon has a toggle to turn it off. `SIGN_ID="Apple Development: …" ./build.sh` signs with your certificate. With the default ad hoc signature, macOS asks again for VLC access after every rebuild.
+That builds the Release configuration, installs it to `/Applications` and opens it. Without `INSTALL=1` it only builds, into `mac-panel/build/DerivedData/Build/Products/Release/`. Signing is automatic with the team in the project (change **Signing & Capabilities → Team** in Xcode to use your own). Quit it from the app menu, the Dock, the menu-bar icon, or ⌘Q while the panel is active; closing the panel keeps it running, and clicking the Dock icon brings it back.
+
+`CONFIG=AppStore ./build.sh` builds the sandboxed Mac App Store configuration. See [`mac-panel/APP_STORE.md`](mac-panel/APP_STORE.md) for what the sandbox changes and what App Review is likely to question.
 
 **Speed needs one-time setup.** VLC lets other apps play, pause, skip and seek, but not change speed. The panel changes speed through VLC's built-in web control, limited to this Mac (127.0.0.1). Click the speed control, then **Set up**: the panel quits VLC, turns on the web control in VLC's settings (`vlcrc`, backed up once to `vlcrc.video-tags-backup`), and reopens VLC. A password or port you already set is kept.
 

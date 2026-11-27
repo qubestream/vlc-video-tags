@@ -45,3 +45,7 @@ No Windows/Linux, no URL/stream tagging, no auto-start. Enable once per session:
 ## 2026-08-13 — Public 1.0 as VLC-Video-Tags, GPL-2.0-or-later
 
 Project title is VLC-Video-Tags. GitHub slug stays `qubestream/vlc-video-tags`. VLC menu item stays **Video Tags**. Version 1.0. License is GNU GPL v2.0 or later (same family as VLC). Repo is public.
+
+## Panel as a real app, App Store ready (1.5)
+
+The panel moved from a `swiftc` script to `mac-panel/VideoTagsPanel.xcodeproj` (one target, bundle id `dev.qubestream.videotags.panel`, automatic signing, hardened runtime). It is a regular app now (Dock icon, app menu, ⌘Q) and keeps the menu-bar icon. Open at Login is opt-in; builds before 1.5 turned it on by themselves, so 1.5 turns that off once. Three configurations: Debug, Release (no sandbox, for direct use and Developer ID), AppStore (App Sandbox). The sandbox findings and the plan for App Review are in `mac-panel/APP_STORE.md`. VLC's files are reached through the real home folder (`getpwuid`), because the sandbox points `NSHomeDirectory()` at the app's container.
