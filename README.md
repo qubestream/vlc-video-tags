@@ -62,12 +62,13 @@ Clicking Green, Red, or a custom tag cancels a pending delete. Delete removes th
 
 `mac-panel/` holds **Video Tags Panel**, a small native app that does the same job as the extension from outside VLC, plus what a Lua extension cannot do:
 
-- **Global hotkeys.** ⌃⌥1 to ⌃⌥9 toggle palette tag 1 to 9 (Green is 1, Red is 2, then your custom tags in order). ⌃⌥⌫ marks or unmarks the current video for Trash.
+- **Global hotkeys.** ⌃⌥1 to ⌃⌥9 toggle palette tag 1 to 9 (Green is 1, Red is 2, then your custom tags in order). ⌃⌥⌫ marks or unmarks the current video for Trash. ⌃⌥P switches tag profile.
 - **Playback remote** across the top: previous video, back 5 s, play/pause, forward 5 s, next video, and speed (− 1.5× +; click the number for normal speed). Hotkeys: ⌃⌥Space play/pause, ⌃⌥← ⌃⌥→ previous/next video, ⌃⌥↑ ⌃⌥↓ faster/slower, ⌃⌥0 normal speed.
 - **Always there.** Floats above VLC, including full screen, and follows you across Spaces. No **VLC → Extensions** step each launch. It is a normal Mac app: Dock icon, app menu, ⌘Q, plus a tag icon in the menu bar. **Open at Login** is off until you turn it on (app menu or menu-bar icon).
 - **Safer Delete.** Marking for Trash keeps the tags until the file is actually trashed, so unmarking loses nothing. After a trash, **Undo** shows for a few seconds.
 - **Comments that save themselves.** The box at the bottom edits the video's Finder **Get Info → Comments**. It loads the comment when a video starts and saves when you go to the next video, pause, press Return, click away, or quit. ⌃⌥C jumps to the box; Return saves and hands the keyboard back to VLC, ⌥Return adds a line, Esc undoes your edit. Spotlight indexes the comment too.
 - **Same palette.** It reads and writes the same `video-tags-palette.txt`, so buttons you add in either place show in both. Right-click a custom tag to remove it from the palette.
+- **Tag profiles.** Keep separate sets of tags, such as Personal and Work. The row above the buttons lists your profiles: click one to swap the whole grid, and ⌃⌥1 to ⌃⌥9 then follow that profile. ⌃⌥P switches to the next profile. The ⋯ menu (and the Profile menu in the menu bar) creates, renames and deletes profiles. Green and Red are in every profile. Your existing tags became the **Personal** profile. Profiles are kept in `video-tags-profiles.json` next to the palette file, and the palette file always holds the active profile, so the VLC extension shows the same buttons. Deleting a profile does not untag any video.
 
 It reads the playing file through VLC's AppleScript dictionary and sets tags and Trash with Foundation. Comments go through Finder, because Get Info reads them from Finder's own `.DS_Store` and not only from the Spotlight attribute, so the first save asks once whether Video Tags Panel may control Finder. If you say no, comments still reach Spotlight (`kMDItemFinderComment`) but not Get Info.
 

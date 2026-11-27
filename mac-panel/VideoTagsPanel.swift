@@ -51,6 +51,10 @@ enum Paths {
 
     /// Shared with the Lua extension, so both show the same buttons.
     static var palette: URL { support.appendingPathComponent("video-tags-palette.txt") }
+
+    /// Every profile's tags and which one is active. The palette file always
+    /// holds the active profile's tags, so the Lua extension follows along.
+    static var profiles: URL { support.appendingPathComponent("video-tags-profiles.json") }
 }
 
 enum Rules {
@@ -115,6 +119,78 @@ struct PaletteStore {
 
     private static func modificationDate(_ url: URL) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+}
+
+// MARK: - Tag profiles
+
+/// A named set of custom tags, such as Personal or Work. Green and Red are in every profile.
+struct TagProfile: Codable, Equatable, Identifiable {
+    var name: String
+    var tags: [String]
+    var id: String { name }
+}
+
+struct ProfileFile: Codable {
+    var active: String
+    var profiles: [TagProfile]
+}
+
+enum ProfileStore {
+    static let defaultName = "Personal"
+
+    static func load() -> ProfileFile? {
+        guard let data = try? Data(contentsOf: Paths.profiles),
+              var file = try? JSONDecoder().decode(ProfileFile.self, from: data) else { return nil }
+        var seen: [String] = []
+        file.profiles = file.profiles.compactMap { profile in
+            guard let name = Rules.sanitize(profile.name), !seen.containsIgnoringCase(name) else { return nil }
+            seen.append(name)
+            var tags: [String] = []
+            for tag in profile.tags {
+                if let t = Rules.sanitize(tag), !Rules.isBuiltin(t), !tags.containsIgnoringCase(t) { tags.append(t) }
+            }
+            return TagProfile(name: name, tags: tags)
+        }
+        guard let first = file.profiles.first else { return nil }
+        if !seen.contains(file.active) { file.active = first.name }
+        return file
+    }
+
+    static func save(_ file: ProfileFile) throws {
+        try FileManager.default.createDirectory(at: Paths.support, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted]
+        try encoder.encode(file).write(to: Paths.profiles, options: .atomic)
+    }
+}
+
+/// Asks for a short name in a small sheet-like alert. Returns nil on Cancel.
+@MainActor
+enum NamePrompt {
+    static func ask(title: String, message: String, initial: String = "", confirm: String) -> String? {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: confirm)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = initial
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
+    }
+
+    static func confirm(title: String, message: String, button: String) -> Bool {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: button).hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
 
@@ -598,6 +674,8 @@ final class PanelModel: ObservableObject {
     @Published private(set) var currentPath: String?
     @Published private(set) var tags: [String] = []           // palette tags on the current file
     @Published private(set) var custom: [String] = []
+    @Published private(set) var profiles: [TagProfile] = []
+    @Published private(set) var activeProfile = ProfileStore.defaultName
     @Published private(set) var pendingDelete: String?
     @Published private(set) var progress: Double = 0
     @Published private(set) var playing = false
@@ -628,6 +706,18 @@ final class PanelModel: ObservableObject {
 
     init() {
         custom = store.load()
+        if let file = ProfileStore.load() {
+            profiles = file.profiles
+            activeProfile = file.active
+            // The palette file is the truth for the active profile: the Lua
+            // extension may have added tags while the panel was closed.
+            syncActiveProfile()
+        } else {
+            // First run with profiles: today's palette becomes the default profile.
+            profiles = [TagProfile(name: ProfileStore.defaultName, tags: custom)]
+            activeProfile = ProfileStore.defaultName
+            saveProfiles()
+        }
         web = VLCPrefs.current()
         speedStatus = web == nil ? .off : .connecting
     }
@@ -645,7 +735,7 @@ final class PanelModel: ObservableObject {
     // MARK: Poll
 
     func tick() {
-        if store.changedOnDisk() { custom = store.load(); refreshTags() }
+        if store.changedOnDisk() { custom = store.load(); syncActiveProfile(); refreshTags() }
 
         switch vlc.snapshot() {
         case .failure(.notRunning):
@@ -963,6 +1053,77 @@ final class PanelModel: ObservableObject {
 
     private func persistPalette() {
         do { try store.save(custom) } catch { flash("Could not save palette: \(error.localizedDescription)") }
+        syncActiveProfile()
+    }
+
+    // MARK: Profiles
+
+    private var activeIndex: Int? { profiles.firstIndex { $0.name == activeProfile } }
+
+    /// Copies the palette into the active profile and saves if it changed.
+    private func syncActiveProfile() {
+        guard let i = activeIndex, profiles[i].tags != custom else { return }
+        profiles[i].tags = custom
+        saveProfiles()
+    }
+
+    private func saveProfiles() {
+        do { try ProfileStore.save(ProfileFile(active: activeProfile, profiles: profiles)) }
+        catch { flash("Could not save profiles: \(error.localizedDescription)") }
+    }
+
+    /// Swaps the whole tag grid, and so the ⌃⌥1–9 hotkeys, to another profile.
+    func switchProfile(to name: String) {
+        guard name != activeProfile, let profile = profiles.first(where: { $0.name == name }) else { return }
+        syncActiveProfile()
+        activeProfile = profile.name
+        custom = profile.tags
+        do { try store.save(custom) } catch { flash("Could not save palette: \(error.localizedDescription)") }
+        saveProfiles()
+        refreshTags()
+        flash("\(profile.name) profile")
+    }
+
+    func nextProfile() {
+        guard profiles.count > 1, let i = activeIndex else {
+            flash("Only one profile. Add one with the profile menu.")
+            return
+        }
+        switchProfile(to: profiles[(i + 1) % profiles.count].name)
+    }
+
+    /// Makes an empty profile and switches to it.
+    @discardableResult
+    func createProfile(_ raw: String) -> Bool {
+        guard let name = Rules.sanitize(raw) else { flash("Profile names are 1–40 characters, no commas"); return false }
+        guard !profiles.map(\.name).containsIgnoringCase(name) else { flash("There is already a \(name) profile"); return false }
+        profiles.append(TagProfile(name: name, tags: []))
+        saveProfiles()
+        switchProfile(to: name)
+        return true
+    }
+
+    @discardableResult
+    func renameProfile(_ old: String, to raw: String) -> Bool {
+        guard let i = profiles.firstIndex(where: { $0.name == old }) else { return false }
+        guard let name = Rules.sanitize(raw) else { flash("Profile names are 1–40 characters, no commas"); return false }
+        if name == old { return true }
+        let others = profiles.map(\.name).filter { $0 != old }
+        guard !others.containsIgnoringCase(name) else { flash("There is already a \(name) profile"); return false }
+        profiles[i].name = name
+        if activeProfile == old { activeProfile = name }
+        saveProfiles()
+        flash("Renamed to \(name)")
+        return true
+    }
+
+    /// Deletes a profile's list of tags. Files already tagged are not changed.
+    func deleteProfile(_ name: String) {
+        guard profiles.count > 1, let i = profiles.firstIndex(where: { $0.name == name }) else { return }
+        if name == activeProfile { switchProfile(to: profiles[i == 0 ? 1 : 0].name) }
+        profiles.removeAll { $0.name == name }
+        saveProfiles()
+        flash("Deleted the \(name) profile")
     }
 
     private func flash(_ text: String) {
@@ -1072,6 +1233,7 @@ struct PanelView: View {
             if model.connection == .needsPermission {
                 permissionCard
             } else {
+                profileBar
                 tagGrid
                 deleteButton
                 addRow
@@ -1275,6 +1437,66 @@ struct PanelView: View {
         case .failed: return "Can't read VLC"
         case .playing: return model.fileName ?? "Playing"
         }
+    }
+
+    // Profiles
+
+    /// One click switches profile; the menu creates, renames and deletes.
+    private var profileBar: some View {
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(model.profiles) { profile in
+                        let active = profile.name == model.activeProfile
+                        Button { model.switchProfile(to: profile.name) } label: {
+                            Text(profile.name)
+                                .font(.caption.weight(active ? .semibold : .regular))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(active ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06)))
+                                .overlay(Capsule().strokeBorder(active ? Color.accentColor.opacity(0.7) : Color.clear))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help(active ? "Active profile" : "Switch to \(profile.name)")
+                    }
+                }
+            }
+            Menu {
+                Button("New Profile…") { newProfile() }
+                Button("Rename “\(model.activeProfile)”…") { renameProfile() }
+                Divider()
+                Button("Delete “\(model.activeProfile)”…", role: .destructive) { deleteProfile() }
+                    .disabled(model.profiles.count < 2)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Profiles · \(HotKeys.modifierGlyphs)P switches to the next one")
+        }
+    }
+
+    private func newProfile() {
+        guard let name = NamePrompt.ask(title: "New Profile",
+                                        message: "A profile is its own set of tags. Green and Red are in every profile.",
+                                        confirm: "Create") else { return }
+        model.createProfile(name)
+    }
+
+    private func renameProfile() {
+        let old = model.activeProfile
+        guard let name = NamePrompt.ask(title: "Rename Profile", message: "", initial: old, confirm: "Rename") else { return }
+        model.renameProfile(old, to: name)
+    }
+
+    private func deleteProfile() {
+        let name = model.activeProfile
+        guard NamePrompt.confirm(title: "Delete the \(name) profile?",
+                                 message: "Its tag buttons go away. Videos you already tagged keep their tags.",
+                                 button: "Delete") else { return }
+        model.deleteProfile(name)
     }
 
     // Tags
@@ -1515,7 +1737,7 @@ final class FloatingPanel: NSPanel {
 // MARK: - App
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     private var model: PanelModel!
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem!
@@ -1590,6 +1812,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         HotKeys.shared.register(keyCode: kVK_Delete, id: 100) { [weak self] in
             self?.model.toggleDelete()
         }
+        HotKeys.shared.register(keyCode: kVK_ANSI_P, id: 108) { [weak self] in
+            self?.model.nextProfile()
+        }
         HotKeys.shared.register(keyCode: kVK_ANSI_C, id: 107) { [weak self] in
             guard let self else { return }
             self.panel.orderFrontRegardless()
@@ -1661,8 +1886,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         statusItem.button?.image = Self.menuBarGlyph()
         let menu = NSMenu()
         menu.addItem(withTitle: "Show / Hide Panel", action: #selector(togglePanel), keyEquivalent: "").target = self
+        let profiles = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        profiles.submenu = makeProfilesMenu()
+        menu.addItem(profiles)
         menu.addItem(.separator())
-        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 tags · ⌫ Delete · C comment · Space play · ←→ video · ↑↓ speed", action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: "\(HotKeys.modifierGlyphs)1–9 tags · P profile · ⌫ Delete · C comment · Space play · ←→ video · ↑↓ speed", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())
@@ -1709,6 +1937,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         main.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
 
+        main.addItem(withTitle: "Profile", action: nil, keyEquivalent: "").submenu = makeProfilesMenu()
+
         let window = NSMenu(title: "Window")
         window.addItem(withTitle: "Show Tags Panel", action: #selector(togglePanel), keyEquivalent: "1").target = self
         window.addItem(.separator())
@@ -1718,6 +1948,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.windowsMenu = window
 
         NSApp.mainMenu = main
+    }
+
+    /// Rebuilt each time it opens, so it lists the current profiles.
+    private func makeProfilesMenu() -> NSMenu {
+        let menu = NSMenu(title: "Profile")
+        menu.delegate = self
+        return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.title == "Profile" else { return }
+        menu.removeAllItems()
+        for (i, profile) in model.profiles.enumerated() {
+            let item = NSMenuItem(title: profile.name, action: #selector(chooseProfile(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            item.state = profile.name == model.activeProfile ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let next = NSMenuItem(title: "Next Profile  \(HotKeys.modifierGlyphs)P", action: #selector(nextProfile), keyEquivalent: "")
+        next.target = self
+        next.isEnabled = model.profiles.count > 1
+        menu.addItem(next)
+        menu.addItem(withTitle: "New Profile…", action: #selector(newProfile), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Rename “\(model.activeProfile)”…", action: #selector(renameProfile), keyEquivalent: "").target = self
+    }
+
+    @objc private func chooseProfile(_ sender: NSMenuItem) {
+        guard model.profiles.indices.contains(sender.tag) else { return }
+        model.switchProfile(to: model.profiles[sender.tag].name)
+    }
+
+    @objc private func nextProfile() { model.nextProfile() }
+
+    @objc private func newProfile() {
+        guard let name = NamePrompt.ask(title: "New Profile",
+                                        message: "A profile is its own set of tags. Green and Red are in every profile.",
+                                        confirm: "Create") else { return }
+        model.createProfile(name)
+    }
+
+    @objc private func renameProfile() {
+        let old = model.activeProfile
+        guard let name = NamePrompt.ask(title: "Rename Profile", message: "", initial: old, confirm: "Rename") else { return }
+        model.renameProfile(old, to: name)
     }
 
     @objc private func togglePanel() {

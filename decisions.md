@@ -49,3 +49,7 @@ Project title is VLC-Video-Tags. GitHub slug stays `qubestream/vlc-video-tags`. 
 ## Panel as a real app, App Store ready (1.5)
 
 The panel moved from a `swiftc` script to `mac-panel/VideoTagsPanel.xcodeproj` (one target, bundle id `dev.qubestream.videotags.panel`, automatic signing, hardened runtime). It is a regular app now (Dock icon, app menu, ⌘Q) and keeps the menu-bar icon. Open at Login is opt-in; builds before 1.5 turned it on by themselves, so 1.5 turns that off once. Three configurations: Debug, Release (no sandbox, for direct use and Developer ID), AppStore (App Sandbox). The sandbox findings and the plan for App Review are in `mac-panel/APP_STORE.md`. VLC's files are reached through the real home folder (`getpwuid`), because the sandbox points `NSHomeDirectory()` at the app's container.
+
+## Tag profiles (1.6)
+
+The panel keeps named sets of custom tags in `video-tags-profiles.json` (support folder). One is active. `video-tags-palette.txt` always mirrors the active profile, so the Lua extension needs no change and edits made there flow back into the active profile. The existing palette migrates into a profile named Personal on first launch. Built-ins Green and Red are in every profile. ⌃⌥P cycles profiles; ⌃⌥1–9 follow the active grid. Tagging stays manual (AI tagging declined).
