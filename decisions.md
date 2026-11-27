@@ -53,3 +53,7 @@ The panel moved from a `swiftc` script to `mac-panel/VideoTagsPanel.xcodeproj` (
 ## Tag profiles (1.6)
 
 The panel keeps named sets of custom tags in `video-tags-profiles.json` (support folder). One is active. `video-tags-palette.txt` always mirrors the active profile, so the Lua extension needs no change and edits made there flow back into the active profile. The existing palette migrates into a profile named Personal on first launch. Built-ins Green and Red are in every profile. ⌃⌥P cycles profiles; ⌃⌥1–9 follow the active grid. Tagging stays manual (AI tagging declined).
+
+## Tag actions: move to folder (1.7)
+
+A tag can carry one optional action, "move to folder", stored per profile as `moves` (tag → folder path) in `video-tags-profiles.json`. The action waits for the same moment as Delete (next file starts, or the playlist ends near the end) so a playing file is never moved. Delete wins over a pending move, and removing the tag cancels it. The move is a plain `FileManager.moveItem`, which keeps Finder tags and the comment xattr; queued comments are drained first. Undo is shared with Trash (12 seconds). The Delete button is light orange (fill and outline) with separate light and dark values for legibility.
