@@ -20,6 +20,9 @@ Tested on macOS 27 with a sandboxed probe signed with these exact entitlements.
 | Shared tag palette with the Lua extension, and the one-time speed setup that edits `vlcrc` | Works | `temporary-exception.files.home-relative-path.read-write` for VLC's two folders | **High.** Could be replaced by asking the user to pick the folder once. |
 | Profile backups (automatic, in `org.videolan.vlc/Video Tags Backups`) | Works | Same home-relative exception as the palette | Moves with the palette: if the palette leaves VLC's folder, keep backups in the app container instead |
 | Export and Import profiles | Works | `files.user-selected.read-write` (Save and Open panels) | Low |
+| Settings window, Help window and Help menu search, About | Works | none | Low |
+| Open at Login (Settings → General, `SMAppService`) | Works | none | Low. Off until the user turns it on, as App Review requires. |
+| Installing or updating the VLC Lua extension from Settings → VLC (copies the bundled `video_tags.lua` and `finder_ops.applescript` into `org.videolan.vlc/lua/extensions`) | Works | Same home-relative exception as the palette | Moves with the palette. Without the exception, offer the two files through a Save panel pointed at VLC's folder instead. Writing an executable script for another app may draw questions; the files are plain text that VLC loads itself. |
 | Speed and seek over VLC's web interface on 127.0.0.1 | Works | `network.client` | Low |
 | Global hotkeys (⌃⌥…) | Works | none (Carbon hot keys are allowed) | Low |
 

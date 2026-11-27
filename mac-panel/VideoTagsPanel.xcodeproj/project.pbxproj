@@ -12,6 +12,11 @@
 		A1000000000000000000B0E2 /* TagOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E2 /* TagOrder.swift */; };
 		A1000000000000000000B0E3 /* SafeMove.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E3 /* SafeMove.swift */; };
 		A1000000000000000000B0E4 /* ProfileBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E4 /* ProfileBackup.swift */; };
+		A1000000000000000000B0E5 /* HelpContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E5 /* HelpContent.swift */; };
+		A1000000000000000000B0E6 /* HelpWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E6 /* HelpWindow.swift */; };
+		A1000000000000000000B0E7 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E7 /* SettingsWindow.swift */; };
+		A1000000000000000000B0E8 /* video_tags.lua in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E8 /* video_tags.lua */; };
+		A1000000000000000000B0E9 /* finder_ops.applescript in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F0E9 /* finder_ops.applescript */; };
 		A1000000000000000000B002 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000F002 /* AppIcon.icon */; };
 /* End PBXBuildFile section */
 
@@ -21,6 +26,11 @@
 		A1000000000000000000F0E2 /* TagOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagOrder.swift; sourceTree = "<group>"; };
 		A1000000000000000000F0E3 /* SafeMove.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeMove.swift; sourceTree = "<group>"; };
 		A1000000000000000000F0E4 /* ProfileBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileBackup.swift; sourceTree = "<group>"; };
+		A1000000000000000000F0E5 /* HelpContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpContent.swift; sourceTree = "<group>"; };
+		A1000000000000000000F0E6 /* HelpWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpWindow.swift; sourceTree = "<group>"; };
+		A1000000000000000000F0E7 /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
+		A1000000000000000000F0E8 /* video_tags.lua */ = {isa = PBXFileReference; explicitFileType = text; name = video_tags.lua; path = ../lua/extensions/video_tags.lua; sourceTree = "<group>"; };
+		A1000000000000000000F0E9 /* finder_ops.applescript */ = {isa = PBXFileReference; explicitFileType = text; name = finder_ops.applescript; path = ../scripts/finder_ops.applescript; sourceTree = "<group>"; };
 		A1000000000000000000F002 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		A1000000000000000000F003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1000000000000000000F004 /* VideoTagsPanel.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = VideoTagsPanel.entitlements; sourceTree = "<group>"; };
@@ -47,6 +57,11 @@
 				A1000000000000000000F0E2 /* TagOrder.swift */,
 				A1000000000000000000F0E3 /* SafeMove.swift */,
 				A1000000000000000000F0E4 /* ProfileBackup.swift */,
+				A1000000000000000000F0E5 /* HelpContent.swift */,
+				A1000000000000000000F0E6 /* HelpWindow.swift */,
+				A1000000000000000000F0E7 /* SettingsWindow.swift */,
+				A1000000000000000000F0E8 /* video_tags.lua */,
+				A1000000000000000000F0E9 /* finder_ops.applescript */,
 				A1000000000000000000G001 /* icon */,
 				A1000000000000000000G002 /* Config */,
 				A1000000000000000000G0FF /* Products */,
@@ -138,6 +153,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000000000000000B002 /* AppIcon.icon in Resources */,
+				A1000000000000000000B0E8 /* video_tags.lua in Resources */,
+				A1000000000000000000B0E9 /* finder_ops.applescript in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -153,6 +170,9 @@
 				A1000000000000000000B0E2 /* TagOrder.swift in Sources */,
 				A1000000000000000000B0E3 /* SafeMove.swift in Sources */,
 				A1000000000000000000B0E4 /* ProfileBackup.swift in Sources */,
+				A1000000000000000000B0E5 /* HelpContent.swift in Sources */,
+				A1000000000000000000B0E6 /* HelpWindow.swift in Sources */,
+				A1000000000000000000B0E7 /* SettingsWindow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -223,7 +243,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/VideoTagsPanel.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = 9R42GRC7LC;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Config/Info.plist;
@@ -231,7 +251,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.13.0;
+				MARKETING_VERSION = 1.14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.qubestream.videotags.panel;
 				PRODUCT_NAME = "Video Tags Panel";
 				SWIFT_VERSION = 5.0;
@@ -245,7 +265,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/VideoTagsPanel.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = 9R42GRC7LC;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Config/Info.plist;
@@ -253,7 +273,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.13.0;
+				MARKETING_VERSION = 1.14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.qubestream.videotags.panel;
 				PRODUCT_NAME = "Video Tags Panel";
 				SWIFT_VERSION = 5.0;
@@ -267,7 +287,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/VideoTagsPanel-AppStore.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = 9R42GRC7LC;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Config/Info.plist;
@@ -275,7 +295,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.13.0;
+				MARKETING_VERSION = 1.14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.qubestream.videotags.panel;
 				PRODUCT_NAME = "Video Tags Panel";
 				SWIFT_VERSION = 5.0;

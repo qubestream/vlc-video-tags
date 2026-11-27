@@ -20,7 +20,7 @@
 //     - Undo for the last Trash
 //     - a Comments box that edits the file's Finder Get Info comment and saves
 //       itself when you skip, pause, or quit (⌃⌥C jumps to it)
-//     - a normal app: Dock icon, app menu, ⌘Q; optional Open at Login
+//     - a normal app: Dock icon, app menu, ⌘Q; Settings (⌘,), Help (⌘?) and optional Open at Login
 //
 // Build: open VideoTagsPanel.xcodeproj in Xcode, or run ./build.sh. macOS 14+.
 
@@ -275,9 +275,8 @@ enum NamePrompt {
     }
 }
 
-/// Export, Import and Restore from Backup, shared by the ⋯ menu and the
-/// menu-bar Profile menu. Every file is one you pick in an Open or Save panel,
-/// so this works in the App Sandbox too.
+/// Export, Import and Restore for Settings → Profiles. Every file is one you
+/// pick in an Open or Save panel, so this works in the App Sandbox too.
 @MainActor
 enum ProfileTransfer {
     static func export(_ model: PanelModel) {
@@ -306,23 +305,6 @@ enum ProfileTransfer {
         apply(url, to: model, restoring: false)
     }
 
-    static func restore(_ model: PanelModel) {
-        ProfileStore.backUpCurrent()   // so the folder exists and holds today's profiles
-        guard let url = choose(title: "Restore from Backup", prompt: "Restore",
-                               message: "Backups are named by date and time. The newest is at the bottom.",
-                               folder: Paths.backups) else { return }
-        apply(url, to: model, restoring: true)
-    }
-
-    static func showBackups() {
-        ProfileStore.backUpCurrent()
-        if let newest = ProfileBackup.list(in: Paths.backups).first {
-            NSWorkspace.shared.activateFileViewerSelecting([newest.url])
-        } else {
-            NSWorkspace.shared.open(Paths.backups)
-        }
-    }
-
     private static func choose(title: String, prompt: String, message: String, folder: URL?) -> URL? {
         NSApp.activate()
         let open = NSOpenPanel()
@@ -338,7 +320,7 @@ enum ProfileTransfer {
     }
 
     /// Shows what the file holds and what would change, then applies it.
-    private static func apply(_ url: URL, to model: PanelModel, restoring: Bool) {
+    static func apply(_ url: URL, to model: PanelModel, restoring: Bool) {
         guard let data = try? Data(contentsOf: url), let file = ProfileStore.decode(data),
               let incoming = (try? ProfileStore.encode(file)).flatMap(ProfileBackup.summary(of:)) else {
             NSApp.activate()
@@ -363,7 +345,7 @@ enum ProfileTransfer {
             Compared with your profiles now:
             \(diff.lines.joined(separator: "\n"))
 
-            Your current profiles are backed up first, so you can go back with Restore from Backup. Files you already tagged are not changed.
+            Your current profiles are backed up first, so you can go back from Settings → Profiles → Backups. Files you already tagged are not changed.
             """
         alert.addButton(withTitle: restoring ? "Restore" : "Replace All")
         let canAdd = !restoring && !diff.added.isEmpty
@@ -986,7 +968,7 @@ final class PanelModel: ObservableObject {
             activeProfile = ProfileStore.defaultName
             saveProfiles()
             if unreadable != nil, !ProfileBackup.list(in: Paths.backups).isEmpty {
-                flash("Your profiles file couldn't be read. Use Restore from Backup to get them back.")
+                flash("Your profiles file couldn't be read. Restore them in Settings → Profiles → Backups.")
             }
         }
         web = VLCPrefs.current()
@@ -1580,7 +1562,7 @@ final class PanelModel: ObservableObject {
         do { try store.save(custom) } catch { flash("Could not save palette: \(error.localizedDescription)") }
         saveProfiles()
         refreshTags()
-        flash("Profiles replaced. Your old ones are in Restore from Backup.")
+        flash("Profiles replaced. Your old ones are in Settings → Profiles → Backups.")
         return true
     }
 
@@ -1627,6 +1609,8 @@ final class HotKeys {
     private var actions: [UInt32: @MainActor () -> Void] = [:]
     private var handlerInstalled = false
     private let signature: OSType = 0x5654_4147 // 'VTAG'
+    /// Shortcuts another app already holds, so Settings and Help can say so.
+    private(set) var taken: Set<UInt32> = []
 
     /// ANSI digit key codes are not sequential, so list them.
     static let digitKeys: [Int] = [
@@ -1644,7 +1628,9 @@ final class HotKeys {
         if status == noErr, let ref {
             refs.append(ref)
             actions[id] = action
+            taken.remove(id)
         } else {
+            taken.insert(id)
             NSLog("Video Tags Panel: hotkey \(id) is taken by another app (status \(status))")
         }
     }
@@ -1653,6 +1639,12 @@ final class HotKeys {
         refs.forEach { UnregisterEventHotKey($0) }
         refs.removeAll()
         actions.removeAll()
+        taken.removeAll()
+    }
+
+    /// Whether another app holds this shortcut. Id 1 stands for all of ⌃⌥1–9.
+    func isTaken(_ id: UInt32) -> Bool {
+        id == 1 ? !taken.isDisjoint(with: 1...9) : taken.contains(id)
     }
 
     fileprivate func fire(_ id: UInt32) {
@@ -1996,10 +1988,8 @@ struct PanelView: View {
                 Button("New Profile…") { newProfile() }
                 Button("Rename “\(model.activeProfile)”…") { renameProfile() }
                 Divider()
-                Button("Export Profiles…") { ProfileTransfer.export(model) }
-                Button("Import Profiles…") { ProfileTransfer.importFile(model) }
-                Button("Restore from Backup…") { ProfileTransfer.restore(model) }
-                Button("Show Backups in Finder") { ProfileTransfer.showBackups() }
+                Button("Back Up and Restore…") { AppDelegate.showSettings(.profiles) }
+                Button("Settings…") { AppDelegate.showSettings(nil) }
                 Divider()
                 Button("Delete “\(model.activeProfile)”…", role: .destructive) { deleteProfile() }
                     .disabled(model.profiles.count < 2)
@@ -2585,7 +2575,7 @@ final class FloatingPanel: NSPanel {
         orderFrontRegardless()
     }
 
-    private func positionTopRight() {
+    func positionTopRight() {
         guard let screen = NSScreen.main?.visibleFrame else { return }
         setFrameOrigin(NSPoint(x: screen.maxX - frame.width - 24, y: screen.maxY - frame.height - 24))
     }
@@ -2598,6 +2588,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var model: PanelModel!
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem!
+    private var settings: SettingsWindowController?
+    private var help: HelpWindowController?
+    private var helpSearch: HelpMenuSearch?   // NSApp holds the search handler weakly
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = PanelModel()
@@ -2606,9 +2599,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         installHotKeys()
         model.start()
         installMainMenu()
+        installHelpSearch()
         installEditShortcuts()
         panel.orderFrontRegardless()
         undoAutomaticLoginItem()
+    }
+
+    // MARK: Settings and Help
+
+    /// Opens Settings from anywhere, such as the panel's ⋯ menu.
+    static func showSettings(_ tab: SettingsTab?) {
+        (NSApp.delegate as? AppDelegate)?.showSettings(tab)
+    }
+
+    func showSettings(_ tab: SettingsTab? = nil) {
+        if settings == nil {
+            settings = SettingsWindowController(model: model, actions: SettingsActions(
+                setMenuBarIconVisible: { [weak self] on in self?.statusItem.isVisible = on },
+                resetPanelPosition: { [weak self] in
+                    self?.panel.positionTopRight()
+                    self?.panel.show()
+                },
+                openHelp: { [weak self] topic in self?.showHelp(topic: topic) }))
+        }
+        settings?.show(tab)
+    }
+
+    func showHelp(topic: String? = nil, search: String? = nil) {
+        if help == nil { help = HelpWindowController() }
+        help?.show(topic: topic, search: search)
+    }
+
+    private func installHelpSearch() {
+        let search = HelpMenuSearch { [weak self] topic, query in self?.showHelp(topic: topic, search: query) }
+        helpSearch = search
+        NSApp.registerUserInterfaceItemSearchHandler(search)
+    }
+
+    @objc private func openSettings() { showSettings() }
+    @objc private func openHelp() { showHelp() }
+    @objc private func openShortcutsHelp() { showHelp(topic: "shortcuts") }
+    @objc private func reportIssue() { NSWorkspace.shared.open(URL(string: HelpContent.issues)!) }
+    @objc private func openRepository() { NSWorkspace.shared.open(URL(string: HelpContent.repository)!) }
+
+    @objc private func showAbout() {
+        let body = NSMutableAttributedString(
+            string: "Finder tags, comments and a playback remote for the video playing in VLC.\n\n",
+            attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                         .foregroundColor: NSColor.labelColor])
+        body.append(NSAttributedString(string: "github.com/qubestream/vlc-video-tags", attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .link: URL(string: HelpContent.repository)!,
+        ]))
+        body.append(NSAttributedString(
+            string: "\n\nFree software under the GNU GPL, version 2 or later. Not made by or affiliated with VideoLAN. VLC is a trademark of VideoLAN.",
+            attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                         .foregroundColor: NSColor.secondaryLabelColor]))
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        body.addAttribute(.paragraphStyle, value: centered, range: NSRange(location: 0, length: body.length))
+        NSApp.activate()
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: body])
     }
 
     // MARK: Open at Login (SMAppService, macOS 13+). Off unless the user turns it on.
@@ -2624,24 +2675,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    @objc private func toggleLoginItem(_ sender: NSMenuItem) {
-        UserDefaults.standard.set(true, forKey: "loginItemIsOptIn")
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            NSLog("Video Tags Panel: login item change failed: \(error.localizedDescription)")
-        }
-    }
-
-    // Keeps every "Open at Login" item (app menu and menu-bar menu) in step.
+    // Keeps every Show/Hide item in step with the panel.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(toggleLoginItem(_:)) {
-            item.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        } else if item.action == #selector(togglePanel) {
+        if item.action == #selector(togglePanel) {
             item.title = panel.isVisible && !panel.isMiniaturized ? "Hide Tags Panel" : "Show Tags Panel"
         }
         return true
@@ -2753,11 +2789,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())
-        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
-        login.target = self
-        menu.addItem(login)
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: "Video Tags Panel Help", action: #selector(openHelp), keyEquivalent: "").target = self
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Video Tags Panel", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
+        statusItem.isVisible = UserDefaults.standard.object(forKey: "showMenuBarIcon") as? Bool ?? true
     }
 
     /// The panel takes typing without making the app active (so VLC keeps
@@ -2794,11 +2831,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let main = NSMenu()
 
         let appMenu = NSMenu(title: name)
-        appMenu.addItem(withTitle: "About \(name)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About \(name)", action: #selector(showAbout), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
-        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
-        login.target = self
-        appMenu.addItem(login)
+        appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
         let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
         services.submenu = NSMenu(title: "Services")
@@ -2812,6 +2847,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit \(name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         main.addItem(withTitle: name, action: nil, keyEquivalent: "").submenu = appMenu
+
+        let file = NSMenu(title: "File")
+        file.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        main.addItem(withTitle: "File", action: nil, keyEquivalent: "").submenu = file
 
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
@@ -2832,6 +2871,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         main.addItem(withTitle: "Window", action: nil, keyEquivalent: "").submenu = window
         NSApp.windowsMenu = window
+
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(withTitle: "\(name) Help", action: #selector(openHelp), keyEquivalent: "?").target = self
+        helpMenu.addItem(withTitle: "Keyboard Shortcuts", action: #selector(openShortcutsHelp), keyEquivalent: "").target = self
+        helpMenu.addItem(.separator())
+        helpMenu.addItem(withTitle: "Report an Issue…", action: #selector(reportIssue), keyEquivalent: "").target = self
+        helpMenu.addItem(withTitle: "Video Tags on GitHub", action: #selector(openRepository), keyEquivalent: "").target = self
+        main.addItem(withTitle: "Help", action: nil, keyEquivalent: "").submenu = helpMenu
+        NSApp.helpMenu = helpMenu
 
         NSApp.mainMenu = main
     }
@@ -2861,16 +2909,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.addItem(withTitle: "New Profile…", action: #selector(newProfile), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Rename “\(model.activeProfile)”…", action: #selector(renameProfile), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Export Profiles…", action: #selector(exportProfiles), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Import Profiles…", action: #selector(importProfiles), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Restore from Backup…", action: #selector(restoreProfiles), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Show Backups in Finder", action: #selector(showBackups), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Back Up and Restore…", action: #selector(openProfileSettings), keyEquivalent: "").target = self
     }
 
-    @objc private func exportProfiles() { ProfileTransfer.export(model) }
-    @objc private func importProfiles() { ProfileTransfer.importFile(model) }
-    @objc private func restoreProfiles() { ProfileTransfer.restore(model) }
-    @objc private func showBackups() { ProfileTransfer.showBackups() }
+    @objc private func openProfileSettings() { showSettings(.profiles) }
 
     @objc private func chooseProfile(_ sender: NSMenuItem) {
         guard model.profiles.indices.contains(sender.tag) else { return }
