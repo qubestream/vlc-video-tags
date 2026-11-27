@@ -1856,6 +1856,8 @@ struct PanelView: View {
         model.setMoveFolder(url.path, for: tag)
     }
 
+    private enum ActionButton { static let height: CGFloat = 32 }
+
     private var renameButton: some View {
         let pending = model.pendingRenameIsCurrent
         return Button(action: promptRename) {
@@ -1866,8 +1868,8 @@ struct PanelView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity)
+            // Same size for Delete and Rename: the HStack must not size either one by its text.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: ActionButton.height, maxHeight: ActionButton.height)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(pending ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06))
@@ -1910,8 +1912,8 @@ struct PanelView: View {
                 Text("\(HotKeys.modifierGlyphs)⌫").font(.caption.monospaced()).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity)
+            // Same size for Delete and Rename: the HStack must not size either one by its text.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: ActionButton.height, maxHeight: ActionButton.height)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(model.pendingIsCurrent ? Color.red.opacity(0.22) : DeleteStyle.fill)
