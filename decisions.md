@@ -86,3 +86,15 @@ Glen has put a lot of work into his profiles and wanted a hard backup and a way 
 - **Restore from Backup** is the Open panel pointed at the backups folder, rather than a list inside the menu, so the menus don't read the folder on every redraw.
 
 An unreadable profiles file is copied into the backups as "unreadable" before the panel starts fresh, and the panel says to restore. No iCloud sync was added, per the project rule; Export to any synced folder or drive covers an off-Mac copy. The logic is in `mac-panel/ProfileBackup.swift`, tested by `tests/test_profile_backup.sh`.
+
+## A standard Mac app: Settings, Help and the bundled extension (1.14)
+
+2026-11-27. Glen asked for the panel to behave like a normal Mac app, with Settings under the app name, a help file, and backup, export and import living in Settings. Choices:
+- **Settings (⌘,)** is an AppKit tab window in the system toolbar style with four tabs: General, Profiles, Shortcuts, VLC. Each tab keeps its own size and the window resizes from the top edge, like System Settings panes in other apps.
+- **Profiles tab is the single home for backups.** It lists profiles (add, remove, rename, make active) and every automatic backup with its date, reason and contents, with Back Up Now, Export, Import, Restore and Show in Finder. The four transfer items in the ⋯ and Profile menus became one **Back Up and Restore…** item that opens this tab, so there is one place to look. Restore picks from the list rather than an Open panel, which supersedes the 1.13 choice of an Open panel; the list is read only while the tab is open, so menus still never read the folder.
+- **Open at Login and the menu-bar icon** moved from the menus to Settings → General. Open at Login is still off until turned on. Hiding the menu-bar icon is allowed because the Dock icon and ⌘, still reach everything.
+- **Help is built in**, not an Apple Help Book. A Help Book needs `hiutil` indexing and an extra bundle, and its viewer is slow; a SwiftUI window with searchable topics (`HelpContent.swift`) is one file to keep current. The Help menu's search field lists the same topics through `NSUserInterfaceItemSearching`. A Keyboard Shortcuts topic and the Settings → Shortcuts tab flag any ⌃⌥ shortcut another app already registered.
+- **The Lua extension ships inside the app.** `video_tags.lua` and `finder_ops.applescript` are copied into the bundle as plain resources (not compiled), and Settings → VLC compares them with VLC's copy and offers Install or Update. `install.sh` still works for people without the panel. VLC must be quit with ⌘Q to load the new copy, and the tab says so.
+- **About** adds a description, the GitHub link and the GPL and not-affiliated-with-VideoLAN notes. Report an Issue opens GitHub issues; no telemetry or crash upload.
+
+No new entitlement. Settings, Help and the login item need none; the extension install writes under the existing home-relative exception for `org.videolan.vlc`.
