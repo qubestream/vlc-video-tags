@@ -128,7 +128,20 @@ struct PaletteStore {
 struct TagProfile: Codable, Equatable, Identifiable {
     var name: String
     var tags: [String]
+    /// Tag name → folder path. Tagging a video with one of these tags moves it
+    /// to that folder when you move on, the same way Delete waits.
+    var moves: [String: String]?
     var id: String { name }
+
+    func moveFolder(for tag: String) -> String? {
+        moves?.first { $0.key.caseInsensitiveCompare(tag) == .orderedSame }?.value
+    }
+
+    mutating func setMoveFolder(_ folder: String?, for tag: String) {
+        var all = (moves ?? [:]).filter { $0.key.caseInsensitiveCompare(tag) != .orderedSame }
+        if let folder { all[tag] = folder }
+        moves = all.isEmpty ? nil : all
+    }
 }
 
 struct ProfileFile: Codable {
@@ -150,7 +163,7 @@ enum ProfileStore {
             for tag in profile.tags {
                 if let t = Rules.sanitize(tag), !Rules.isBuiltin(t), !tags.containsIgnoringCase(t) { tags.append(t) }
             }
-            return TagProfile(name: name, tags: tags)
+            return TagProfile(name: name, tags: tags, moves: profile.moves)
         }
         guard let first = file.profiles.first else { return nil }
         if !seen.contains(file.active) { file.active = first.name }
@@ -226,6 +239,29 @@ enum FinderTags {
     static func clear(_ path: String, palette: [String]) throws {
         let kept = read(path).filter { !palette.containsIgnoringCase($0) }
         try write(path, kept)
+    }
+
+    /// Moves the file into `folder`, adding " 2", " 3"… if the name is taken.
+    /// Finder tags and the comment xattr travel with the file.
+    static func move(_ path: String, into folder: String) throws -> URL {
+        let source = URL(fileURLWithPath: path)
+        let dir = URL(fileURLWithPath: folder, isDirectory: true)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else {
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: folder,
+                NSLocalizedDescriptionKey: "The folder \(dir.lastPathComponent) isn't there (is the drive connected?)"])
+        }
+        let base = source.deletingPathExtension().lastPathComponent
+        let ext = source.pathExtension
+        var target = dir.appendingPathComponent(source.lastPathComponent)
+        var n = 2
+        while FileManager.default.fileExists(atPath: target.path) {
+            let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
+            target = dir.appendingPathComponent(name)
+            n += 1
+        }
+        try FileManager.default.moveItem(at: source, to: target)
+        return target
     }
 
     static func trash(_ path: String) throws -> URL? {
@@ -379,6 +415,23 @@ final class VLCBridge {
             set pl to playing
         end try
     end tell
+    -- With nothing loaded (the playlist ended), VLC returns no result and the
+    -- variable is left undefined rather than raising inside the try.
+    try
+        p
+    on error
+        set p to ""
+    end try
+    try
+        t
+    on error
+        set t to -1
+    end try
+    try
+        d
+    on error
+        set d to -1
+    end try
     if p is missing value then set p to ""
     return {p as text, t as integer, d as integer, pl as boolean}
     """
@@ -664,10 +717,19 @@ final class PanelModel: ObservableObject {
         case ready
     }
 
-    struct LastTrash {
+    /// The last Trash or folder move, kept for a short Undo.
+    struct LastMove {
         let originalPath: String
-        let trashedURL: URL
+        let movedURL: URL
         let at: Date
+    }
+
+    /// A tag with a folder was put on a video: it moves there when you move on.
+    struct PendingMove: Equatable {
+        let path: String
+        let folder: String
+        let tag: String
+        var folderName: String { (folder as NSString).lastPathComponent }
     }
 
     @Published private(set) var connection: Connection = .vlcNotRunning
@@ -680,7 +742,8 @@ final class PanelModel: ObservableObject {
     @Published private(set) var progress: Double = 0
     @Published private(set) var playing = false
     @Published private(set) var message: String?
-    @Published private(set) var lastTrash: LastTrash?
+    @Published private(set) var lastMove: LastMove?
+    @Published private(set) var pendingMove: PendingMove?
     @Published private(set) var speedStatus: SpeedStatus = .off
     @Published private(set) var rate: Double = 1
     @Published var showSpeedSetup = false
@@ -692,6 +755,12 @@ final class PanelModel: ObservableObject {
     var palette: [String] { Rules.builtins + custom }
     var fileName: String? { currentPath.map { ($0 as NSString).lastPathComponent } }
     var pendingIsCurrent: Bool { pendingDelete != nil && pendingDelete == currentPath }
+    var pendingMoveIsCurrent: Bool { pendingMove != nil && pendingMove?.path == currentPath }
+
+    /// The folder a tag moves videos to, in the active profile.
+    func moveFolder(for tag: String) -> String? {
+        profiles.first { $0.name == activeProfile }?.moveFolder(for: tag)
+    }
     var commentDirty: Bool { commentPath != nil && comment != savedComment }
 
     private let vlc = VLCBridge()
@@ -766,6 +835,13 @@ final class PanelModel: ObservableObject {
         // The playlist ran out right after the marked file reached its end.
         if let pending = pendingDelete, now.path == nil, pending == currentPath, lastProgress >= Rules.nearEnd {
             flushPendingDelete()
+        }
+        // Same timing for a tag's Move to Folder action.
+        if let move = pendingMove, let next = now.path, next != move.path {
+            flushPendingMove()
+        }
+        if let move = pendingMove, now.path == nil, move.path == currentPath, lastProgress >= Rules.nearEnd {
+            flushPendingMove()
         }
 
         connection = now.path != nil ? .playing : (now.isStream ? .stream : .nothingPlaying)
@@ -953,6 +1029,17 @@ final class PanelModel: ObservableObject {
         do {
             let on = try FinderTags.toggle(path, name)
             refreshTags()
+            if on, let folder = moveFolder(for: name) {
+                let move = PendingMove(path: path, folder: folder, tag: name)
+                pendingMove = move
+                flash("Tagged \(name) · moves to \(move.folderName) when you move on")
+                return
+            }
+            if !on, let move = pendingMove, move.path == path, move.tag.caseInsensitiveCompare(name) == .orderedSame {
+                pendingMove = nil
+                flash("Removed \(name) · it stays where it is")
+                return
+            }
             flash(on ? "Tagged \(name)" : "Removed \(name)")
         } catch {
             flash("Could not change tag: \(error.localizedDescription)")
@@ -973,6 +1060,7 @@ final class PanelModel: ObservableObject {
             flash("Delete cancelled")
         } else {
             pendingDelete = path
+            if pendingMove?.path == path { pendingMove = nil }
             flash("Will move to Trash when this video ends or you skip")
         }
     }
@@ -1004,15 +1092,32 @@ final class PanelModel: ObservableObject {
         guard !Rules.isBuiltin(name) else { return }
         custom = custom.removingIgnoringCase(name)
         persistPalette()
+        if moveFolder(for: name) != nil { setMoveFolder(nil, for: name, quiet: true) }
         refreshTags()
         flash("Removed \(name) from the palette")
     }
 
-    func undoLastTrash() {
-        guard let last = lastTrash else { return }
+    /// Gives a tag a folder to move videos to, or clears it (nil).
+    func setMoveFolder(_ folder: String?, for tag: String, quiet: Bool = false) {
+        guard let i = profiles.firstIndex(where: { $0.name == activeProfile }) else { return }
+        profiles[i].setMoveFolder(folder, for: tag)
+        saveProfiles()
+        if let move = pendingMove, move.tag.caseInsensitiveCompare(tag) == .orderedSame {
+            pendingMove = folder.map { PendingMove(path: move.path, folder: $0, tag: move.tag) }
+        }
+        guard !quiet else { return }
+        if let folder {
+            flash("\(tag) now moves videos to \((folder as NSString).lastPathComponent)")
+        } else {
+            flash("\(tag) no longer moves videos")
+        }
+    }
+
+    func undoLastMove() {
+        guard let last = lastMove else { return }
         do {
-            try FileManager.default.moveItem(at: last.trashedURL, to: URL(fileURLWithPath: last.originalPath))
-            lastTrash = nil
+            try FileManager.default.moveItem(at: last.movedURL, to: URL(fileURLWithPath: last.originalPath))
+            lastMove = nil
             flash("Restored \((last.originalPath as NSString).lastPathComponent)")
         } catch {
             flash("Could not restore: \(error.localizedDescription)")
@@ -1027,17 +1132,33 @@ final class PanelModel: ObservableObject {
         comments.drain()   // a comment save for this file is queued just before
         try? FinderTags.clear(path, palette: palette)
         do {
-            if let trashed = try FinderTags.trash(path) {
-                let entry = LastTrash(originalPath: path, trashedURL: trashed, at: Date())
-                lastTrash = entry
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(Rules.undoWindow))
-                    if self?.lastTrash?.at == entry.at { self?.lastTrash = nil }
-                }
-            }
+            if let trashed = try FinderTags.trash(path) { offerUndo(path, trashed) }
             flash("Moved \((path as NSString).lastPathComponent) to Trash")
         } catch {
             flash("Could not move to Trash: \(error.localizedDescription)")
+        }
+    }
+
+    private func flushPendingMove() {
+        guard let move = pendingMove else { return }
+        pendingMove = nil
+        comments.drain()   // a comment save for this file is queued just before
+        let name = (move.path as NSString).lastPathComponent
+        do {
+            let moved = try FinderTags.move(move.path, into: move.folder)
+            offerUndo(move.path, moved)
+            flash("Moved \(name) to \(move.folderName)")
+        } catch {
+            flash("Could not move \(name): \(error.localizedDescription)")
+        }
+    }
+
+    private func offerUndo(_ original: String, _ moved: URL) {
+        let entry = LastMove(originalPath: original, movedURL: moved, at: Date())
+        lastMove = entry
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Rules.undoWindow))
+            if self?.lastMove?.at == entry.at { self?.lastMove = nil }
         }
     }
 
@@ -1249,6 +1370,7 @@ struct PanelView: View {
         .animation(.snappy(duration: 0.18), value: model.showSpeedSetup)
         .animation(.snappy(duration: 0.18), value: model.tags)
         .animation(.snappy(duration: 0.18), value: model.pendingDelete)
+        .animation(.snappy(duration: 0.18), value: model.pendingMove)
         .onChange(of: model.commentFocusRequest) { commentFocused = true }
         .onChange(of: commentFocused) { _, focused in
             if !focused { model.saveComment() }
@@ -1508,17 +1630,42 @@ struct PanelView: View {
                     name: name,
                     hotkey: index < HotKeys.digitKeys.count ? "\(HotKeys.modifierGlyphs)\(index + 1)" : nil,
                     isOn: model.tags.containsIgnoringCase(name),
-                    enabled: model.currentPath != nil
+                    enabled: model.currentPath != nil,
+                    moveFolder: model.moveFolder(for: name),
+                    movePending: model.pendingMoveIsCurrent && model.pendingMove?.tag.caseInsensitiveCompare(name) == .orderedSame
                 ) {
                     model.toggle(name)
                 }
                 .contextMenu {
+                    if let folder = model.moveFolder(for: name) {
+                        Button("Change Folder for “\(name)”…") { chooseFolder(for: name) }
+                        Button("Stop Moving “\(name)” Videos to \((folder as NSString).lastPathComponent)") {
+                            model.setMoveFolder(nil, for: name)
+                        }
+                    } else {
+                        Button("Move “\(name)” Videos to a Folder…") { chooseFolder(for: name) }
+                    }
                     if !Rules.isBuiltin(name) {
+                        Divider()
                         Button("Remove “\(name)” from palette", role: .destructive) { model.remove(name) }
                     }
                 }
             }
         }
+    }
+
+    private func chooseFolder(for tag: String) {
+        NSApp.activate()
+        let open = NSOpenPanel()
+        open.canChooseDirectories = true
+        open.canChooseFiles = false
+        open.canCreateDirectories = true
+        open.allowsMultipleSelection = false
+        open.prompt = "Choose"
+        open.message = "Videos you tag “\(tag)” move to this folder when you skip or the video ends."
+        if let current = model.moveFolder(for: tag) { open.directoryURL = URL(fileURLWithPath: current) }
+        guard open.runModal() == .OK, let url = open.url else { return }
+        model.setMoveFolder(url.path, for: tag)
     }
 
     private var deleteButton: some View {
@@ -1536,17 +1683,18 @@ struct PanelView: View {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(model.pendingIsCurrent ? Color.red.opacity(0.22) : Color.primary.opacity(0.05))
+                    .fill(model.pendingIsCurrent ? Color.red.opacity(0.22) : DeleteStyle.fill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(model.pendingIsCurrent ? Color.red.opacity(0.7) : Color.primary.opacity(0.1))
+                    .strokeBorder(model.pendingIsCurrent ? Color.red.opacity(0.7) : DeleteStyle.outline, lineWidth: 1.5)
             )
-            .foregroundStyle(model.pendingIsCurrent ? Color.red : Color.primary)
+            .foregroundStyle(model.pendingIsCurrent ? Color.red : DeleteStyle.text)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(model.currentPath == nil)
+        .opacity(model.currentPath == nil ? 0.55 : 1)
     }
 
     private var addRow: some View {
@@ -1591,8 +1739,8 @@ struct PanelView: View {
                 .lineLimit(2)
                 .transition(.opacity)
             Spacer(minLength: 0)
-            if model.lastTrash != nil {
-                Button("Undo") { model.undoLastTrash() }
+            if model.lastMove != nil {
+                Button("Undo") { model.undoLastMove() }
                     .controlSize(.small)
             }
         }
@@ -1602,7 +1750,10 @@ struct PanelView: View {
         if let message = model.message { return message }
         if case .failed(let detail) = model.connection { return detail }
         if model.pendingIsCurrent { return "Will move to Trash when this video ends or you skip" }
-        if model.currentPath == nil { return "Right-click a custom tag to remove it" }
+        if model.pendingMoveIsCurrent, let move = model.pendingMove {
+            return "Moves to \(move.folderName) when this video ends or you skip"
+        }
+        if model.currentPath == nil { return "Right-click a tag to give it a folder or remove it" }
         return model.tags.isEmpty ? "No tags" : "Tags: " + model.tags.joined(separator: ", ")
     }
 }
@@ -1637,11 +1788,29 @@ struct TransportButton: View {
     }
 }
 
+/// Light orange Delete button: fill and outline in the same orange, so it stands
+/// out from the tags. Separate light and dark values keep the text readable.
+enum DeleteStyle {
+    private static func dynamic(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .vibrantDark, .accessibilityHighContrastDarkAqua]) != nil ? dark : light
+        })
+    }
+    private static func rgb(_ r: Int, _ g: Int, _ b: Int, _ a: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: a)
+    }
+    static let fill = dynamic(light: rgb(255, 214, 168), dark: rgb(255, 158, 64, 0.30))
+    static let outline = dynamic(light: rgb(246, 163, 88), dark: rgb(255, 178, 102))
+    static let text = dynamic(light: rgb(122, 56, 0), dark: rgb(255, 208, 156))
+}
+
 struct TagChip: View {
     let name: String
     let hotkey: String?
     let isOn: Bool
     let enabled: Bool
+    var moveFolder: String? = nil
+    var movePending = false
     let action: () -> Void
 
     @State private var hovering = false
@@ -1666,6 +1835,11 @@ struct TagChip: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
+                if moveFolder != nil {
+                    Image(systemName: movePending ? "folder.fill" : "folder")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(movePending ? Color.accentColor : Color.secondary)
+                }
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
