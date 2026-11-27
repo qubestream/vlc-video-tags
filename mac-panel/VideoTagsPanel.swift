@@ -2253,6 +2253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         installHotKeys()
         model.start()
         installMainMenu()
+        installEditShortcuts()
         panel.orderFrontRegardless()
         undoAutomaticLoginItem()
     }
@@ -2403,6 +2404,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.addItem(login)
         menu.addItem(withTitle: "Quit Video Tags Panel", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
+    }
+
+    /// The panel takes typing without making the app active (so VLC keeps
+    /// the menu bar), which means the Edit menu's ⌘C, ⌘V and friends never
+    /// fire. Send them straight to whatever text field has the cursor, in the
+    /// panel or in the Rename box.
+    private var editMonitor: Any?
+    private func installEditShortcuts() {
+        editMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard mods == .command || mods == [.command, .shift],
+                  let window = NSApp.keyWindow,
+                  window.firstResponder is NSText,
+                  let key = event.charactersIgnoringModifiers?.lowercased() else { return event }
+            let action: Selector?
+            switch (key, mods.contains(.shift)) {
+            case ("x", false): action = #selector(NSText.cut(_:))
+            case ("c", false): action = #selector(NSText.copy(_:))
+            case ("v", false): action = #selector(NSText.paste(_:))
+            case ("a", false): action = #selector(NSText.selectAll(_:))
+            case ("z", false): action = Selector(("undo:"))
+            case ("z", true): action = Selector(("redo:"))
+            default: action = nil
+            }
+            guard let action, NSApp.sendAction(action, to: nil, from: nil) else { return event }
+            return nil
+        }
     }
 
     /// Standard app menus, so the app has About, ⌘Q, ⌘H and a working Edit
