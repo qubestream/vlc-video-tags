@@ -1193,6 +1193,20 @@ final class PanelModel: ObservableObject {
         return true
     }
 
+    /// Puts a custom tag at `index` among the other custom tags. The order is
+    /// saved to the palette file and the active profile, and ⌃⌥ numbers follow it.
+    func moveTag(_ name: String, to index: Int) {
+        let next = TagOrder.moving(custom, name, to: index)
+        guard next != custom, let at = next.firstIndex(of: name) else { return }
+        custom = next
+        persistPalette()
+        refreshTags()
+        let slot = Rules.builtins.count + at
+        flash(slot < HotKeys.digitKeys.count
+              ? "Moved \(name), now \(HotKeys.modifierGlyphs)\(slot + 1)"
+              : "Moved \(name)")
+    }
+
     /// Drops a custom name from the palette. Files already tagged are not changed.
     func remove(_ name: String) {
         guard !Rules.isBuiltin(name) else { return }
@@ -1498,6 +1512,9 @@ struct PanelView: View {
     @ObservedObject var model: PanelModel
     @State private var draft = ""
     @FocusState private var commentFocused: Bool
+    @State private var reorder = ReorderState()
+    @State private var holdTask: DispatchWorkItem?
+    @State private var chipFrames: [String: CGRect] = [:]
 
     private let columns = [GridItem(.adaptive(minimum: 92), spacing: 8)]
 
@@ -1828,6 +1845,7 @@ struct PanelView: View {
     // Tags
 
     /// Green, Yellow and Red always share the top row; custom tags follow.
+    /// Hold a custom tag and drag it to reorder; a line shows where it lands.
     private var tagGrid: some View {
         let builtins = Array(model.palette.prefix(Rules.builtins.count))
         let custom = Array(model.palette.dropFirst(Rules.builtins.count).enumerated())
@@ -1841,10 +1859,113 @@ struct PanelView: View {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                     ForEach(custom, id: \.element) { offset, name in
                         tagChip(name, index: Rules.builtins.count + offset)
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(key: ChipFrames.self,
+                                                       value: [name: geo.frame(in: .named(Self.gridSpace))])
+                            })
+                            .offset(reorder.lifted == name ? reorder.offset : .zero)
+                            .zIndex(reorder.lifted == name ? 1 : 0)
+                            .simultaneousGesture(reorderGesture(name))
                     }
                 }
             }
         }
+        .coordinateSpace(name: Self.gridSpace)
+        .onPreferenceChange(ChipFrames.self) { chipFrames = $0 }
+        .overlay(alignment: .topLeading) {
+            if let drop = reorder.drop {
+                Capsule(style: .continuous)
+                    .fill(Color.accentColor)
+                    .shadow(color: Color.accentColor.opacity(0.6), radius: 3)
+                    .frame(width: drop.line.width, height: drop.line.height)
+                    .offset(x: drop.line.minX, y: drop.line.minY)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    // Reordering
+
+    private static let gridSpace = "tagGrid"
+    private static let holdSeconds = 0.35
+    private static let holdSlop: CGFloat = 6     // points the pointer may wander while holding
+
+    private struct ChipFrames: PreferenceKey {
+        static let defaultValue: [String: CGRect] = [:]
+        static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+            value.merge(nextValue()) { $1 }
+        }
+    }
+
+    private struct ReorderState {
+        var pressed: String?           // custom tag under the pointer since mouse down
+        var lifted: String?            // held long enough: it now follows the pointer
+        var wandered = false           // moved too far before the hold finished
+        var location: CGPoint = .zero  // pointer, in the grid's space
+        var offset: CGSize = .zero
+        var drop: TagOrder.Drop?
+        var swallowClick = false       // the release ends a drag, not a tag toggle
+    }
+
+    /// Mouse down starts a hold timer; after it the chip lifts and follows the
+    /// pointer. Releasing drops it at the line. A quick click still toggles the
+    /// tag through the chip's own button.
+    private func reorderGesture(_ name: String) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.gridSpace))
+            .onChanged { value in
+                if reorder.pressed != name {
+                    reorder = ReorderState(pressed: name)
+                    holdTask?.cancel()
+                    let task = DispatchWorkItem { lift(name) }
+                    holdTask = task
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdSeconds, execute: task)
+                }
+                reorder.location = value.location
+                if reorder.lifted == name {
+                    reorder.offset = value.translation
+                    updateDrop()
+                } else if hypot(value.translation.width, value.translation.height) > Self.holdSlop {
+                    reorder.wandered = true
+                    holdTask?.cancel()
+                }
+            }
+            .onEnded { _ in
+                holdTask?.cancel()
+                holdTask = nil
+                guard reorder.lifted == name else {
+                    reorder = ReorderState()
+                    return
+                }
+                let drop = reorder.drop
+                NSCursor.arrow.set()
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    if let drop { model.moveTag(name, to: drop.index) }
+                    reorder = ReorderState(swallowClick: true)
+                }
+                // If the button never saw that mouse up, stop waiting for it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    if reorder.pressed == nil { reorder.swallowClick = false }
+                }
+            }
+    }
+
+    private func lift(_ name: String) {
+        guard reorder.pressed == name, reorder.lifted == nil, !reorder.wandered else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        NSCursor.closedHand.set()
+        withAnimation(.easeOut(duration: 0.12)) {
+            reorder.lifted = name
+            updateDrop()
+        }
+    }
+
+    private func updateDrop() {
+        guard let name = reorder.lifted else { return }
+        let others = model.custom.filter { $0 != name }.compactMap { chipFrames[$0] }
+        // Frames arrive a layout pass late after a change; skip until they match.
+        guard others.count == model.custom.count - 1 else { reorder.drop = nil; return }
+        reorder.drop = TagOrder.drop(at: reorder.location, among: others)
     }
 
     private func tagChip(_ name: String, index: Int) -> some View {
@@ -1854,8 +1975,12 @@ struct PanelView: View {
             isOn: model.tags.containsIgnoringCase(name),
             enabled: model.currentPath != nil,
             moveFolder: model.moveFolder(for: name),
-            movePending: model.pendingMoveIsCurrent && model.pendingMove?.tag.caseInsensitiveCompare(name) == .orderedSame
+            movePending: model.pendingMoveIsCurrent && model.pendingMove?.tag.caseInsensitiveCompare(name) == .orderedSame,
+            lifted: reorder.lifted == name
         ) {
+            // The mouse up that ends a drag also reaches the button: ignore it.
+            if reorder.swallowClick { reorder.swallowClick = false; return }
+            if reorder.lifted != nil { return }
             model.toggle(name)
         }
         .contextMenu {
@@ -2167,6 +2292,7 @@ struct TagChip: View {
     let enabled: Bool
     var moveFolder: String? = nil
     var movePending = false
+    var lifted = false             // held and being dragged to a new place
     let action: () -> Void
 
     @State private var hovering = false
@@ -2210,8 +2336,11 @@ struct TagChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.5)
+        // Not .disabled: a disabled button would also stop the hold-and-drag
+        // reorder, which works with no file open. With no file a tap just says so.
+        .opacity(enabled || lifted ? 1 : 0.5)
+        .scaleEffect(lifted ? 1.08 : 1)
+        .shadow(color: .black.opacity(lifted ? 0.3 : 0), radius: lifted ? 6 : 0, y: lifted ? 3 : 0)
         .onHover { hovering = $0 }
         .help(hotkey.map { "\(isOn ? "Remove" : "Add") \(name)  \($0)" } ?? name)
         .accessibilityLabel("\(name) tag")
