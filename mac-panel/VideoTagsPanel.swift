@@ -274,11 +274,10 @@ enum FinderTags {
         try write(path, kept)
     }
 
-    /// Moves the file into `folder`, adding " 2", " 3"… if the name is taken.
-    /// Finder tags and the comment xattr travel with the file.
     /// Moves a file into `folder`, optionally under a new name, in one step.
-    /// A name already taken there gets " 2", " 3"… (a case-only rename in
-    /// the same folder is not a clash).
+    /// A name already taken there gets " (1)", " (2)"… (the lowest free
+    /// number), never overwriting anything; see `SafeMove`. Finder tags and
+    /// the comment xattr travel with the file.
     static func move(_ path: String, into folder: String, named newName: String? = nil) throws -> URL {
         let source = URL(fileURLWithPath: path)
         let dir = URL(fileURLWithPath: folder, isDirectory: true)
@@ -287,19 +286,7 @@ enum FinderTags {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: folder,
                 NSLocalizedDescriptionKey: "The folder \(dir.lastPathComponent) isn't there (is the drive connected?)"])
         }
-        let name = newName ?? source.lastPathComponent
-        let base = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        var target = dir.appendingPathComponent(name)
-        var n = 2
-        while FileManager.default.fileExists(atPath: target.path),
-              target.path.lowercased() != source.path.lowercased() {
-            let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
-            target = dir.appendingPathComponent(name)
-            n += 1
-        }
-        try FileManager.default.moveItem(at: source, to: target)
-        return target
+        return try SafeMove.move(source, into: dir, named: newName ?? source.lastPathComponent)
     }
 
     static func trash(_ path: String) throws -> URL? {
@@ -1236,7 +1223,11 @@ final class PanelModel: ObservableObject {
     func undoLastMove() {
         guard let last = lastMove else { return }
         do {
-            try FileManager.default.moveItem(at: last.movedURL, to: URL(fileURLWithPath: last.originalPath))
+            // Back to the exact old name, or not at all: never over a file
+            // that took that name in the meantime.
+            let original = URL(fileURLWithPath: last.originalPath)
+            _ = try SafeMove.move(last.movedURL, into: original.deletingLastPathComponent(),
+                                  named: original.lastPathComponent, numbering: false)
             lastMove = nil
             flash("Restored \((last.originalPath as NSString).lastPathComponent)")
         } catch {
@@ -1275,13 +1266,16 @@ final class PanelModel: ObservableObject {
             let moved = try FinderTags.move(path, into: dir, named: newName)
             offerUndo(path, moved)
             let finalName = moved.lastPathComponent
+            let wanted = newName ?? oldName
+            let numbered = finalName != wanted ? " (\(wanted) was taken)" : ""
             switch (newName, folder) {
             case (_?, let folder?):
-                flash("Renamed to \(finalName) and moved to \((folder as NSString).lastPathComponent)")
+                flash("Renamed to \(finalName) and moved to \((folder as NSString).lastPathComponent)\(numbered)")
             case (_?, nil):
-                flash("Renamed \(oldName) to \(finalName)")
+                flash("Renamed \(oldName) to \(finalName)\(numbered)")
             default:
-                flash("Moved \(oldName) to \(move?.folderName ?? "")")
+                flash(numbered.isEmpty ? "Moved \(oldName) to \(move?.folderName ?? "")"
+                                       : "Moved to \(move?.folderName ?? "") as \(finalName)\(numbered)")
             }
         } catch {
             flash("Could not \(newName != nil ? "rename" : "move") \(oldName): \(error.localizedDescription)")
@@ -1313,16 +1307,15 @@ final class PanelModel: ObservableObject {
             cancelPendingRename()
             return
         }
-        // Check the folder it will land in now; at move-on time a late
-        // clash gets " 2" instead of overwriting anything.
-        let folders = [source.deletingLastPathComponent().path] + (pendingMoveIsCurrent ? [pendingMove!.folder] : [])
-        for folder in folders {
-            let target = URL(fileURLWithPath: folder).appendingPathComponent(newName)
-            let caseOnly = target.path.lowercased() == path.lowercased()
-            if !caseOnly, FileManager.default.fileExists(atPath: target.path) {
-                flash("There's already a file named \(newName) in \((folder as NSString).lastPathComponent)")
-                return
-            }
+        // A name taken in its own folder is refused now, so you can pick
+        // another. If a Move will take it elsewhere, a name taken there is
+        // fine: it lands as "Name (1).ext" (see SafeMove), as does any clash
+        // that turns up by move-on time. Nothing is ever overwritten.
+        let target = source.deletingLastPathComponent().appendingPathComponent(newName)
+        let caseOnly = target.path.lowercased() == path.lowercased()
+        if !pendingMoveIsCurrent, !caseOnly, FileManager.default.fileExists(atPath: target.path) {
+            flash("There's already a file named \(newName) in \(source.deletingLastPathComponent().lastPathComponent)")
+            return
         }
         pendingRename = PendingRename(path: path, name: newName)
         flash("Renames to \(newName) when this file ends or you skip")
