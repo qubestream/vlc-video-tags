@@ -1695,7 +1695,7 @@ final class FloatingPanel: NSPanel {
     init<Content: View>(rootView: Content) {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 340, height: 300),
-            styleMask: [.titled, .closable, .nonactivatingPanel, .utilityWindow, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -1727,6 +1727,12 @@ final class FloatingPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }   // so the "New tag" field takes typing
     override var canBecomeMain: Bool { false }
+
+    /// Brings the panel back whether it was closed (red button) or minimized (yellow button).
+    func show() {
+        if isMiniaturized { deminiaturize(nil) }
+        orderFrontRegardless()
+    }
 
     private func positionTopRight() {
         guard let screen = NSScreen.main?.visibleFrame else { return }
@@ -1784,7 +1790,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if item.action == #selector(toggleLoginItem(_:)) {
             item.state = SMAppService.mainApp.status == .enabled ? .on : .off
         } else if item.action == #selector(togglePanel) {
-            item.title = panel.isVisible ? "Hide Tags Panel" : "Show Tags Panel"
+            item.title = panel.isVisible && !panel.isMiniaturized ? "Hide Tags Panel" : "Show Tags Panel"
         }
         return true
     }
@@ -1799,7 +1805,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        panel.orderFrontRegardless()
+        panel.show()
         return true
     }
 
@@ -1817,7 +1823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         HotKeys.shared.register(keyCode: kVK_ANSI_C, id: 107) { [weak self] in
             guard let self else { return }
-            self.panel.orderFrontRegardless()
+            self.panel.show()
             self.panel.makeKey()   // non-activating: VLC stays the active app
             self.model.focusComment()
         }
@@ -1997,7 +2003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     @objc private func togglePanel() {
-        if panel.isVisible { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+        if panel.isVisible && !panel.isMiniaturized { panel.orderOut(nil) } else { panel.show() }
     }
 }
 
