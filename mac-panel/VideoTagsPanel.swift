@@ -28,6 +28,7 @@ import AppKit
 import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Paths and constants
 
@@ -55,6 +56,9 @@ enum Paths {
     /// Every profile's tags and which one is active. The palette file always
     /// holds the active profile's tags, so the Lua extension follows along.
     static var profiles: URL { support.appendingPathComponent("video-tags-profiles.json") }
+
+    /// Dated copies of the profiles file (see ProfileBackup.swift).
+    static var backups: URL { support.appendingPathComponent(ProfileBackup.folderName, isDirectory: true) }
 }
 
 enum Rules {
@@ -153,8 +157,15 @@ enum ProfileStore {
     static let defaultName = "Personal"
 
     static func load() -> ProfileFile? {
-        guard let data = try? Data(contentsOf: Paths.profiles),
-              var file = try? JSONDecoder().decode(ProfileFile.self, from: data) else { return nil }
+        guard let data = try? Data(contentsOf: Paths.profiles) else { return nil }
+        return decode(data)
+    }
+
+    /// Reads a profiles file (the live one, a backup or an export) and cleans
+    /// it up: unique names, valid tags, Green/Yellow/Red/Delete left out.
+    /// Nil if it is not a profiles file or has no profiles.
+    static func decode(_ data: Data) -> ProfileFile? {
+        guard var file = try? JSONDecoder().decode(ProfileFile.self, from: data) else { return nil }
         var seen: [String] = []
         file.profiles = file.profiles.compactMap { profile in
             guard let name = Rules.sanitize(profile.name), !seen.containsIgnoringCase(name) else { return nil }
@@ -170,11 +181,35 @@ enum ProfileStore {
         return file
     }
 
-    static func save(_ file: ProfileFile) throws {
-        try FileManager.default.createDirectory(at: Paths.support, withIntermediateDirectories: true)
+    static func encode(_ file: ProfileFile) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted]
-        try encoder.encode(file).write(to: Paths.profiles, options: .atomic)
+        return try encoder.encode(file)
+    }
+
+    /// Writes the profiles file. Before it changes, the old content is kept as
+    /// an automatic backup (at most one every 10 minutes while you edit; the
+    /// panel also backs up when it opens and quits).
+    static func save(_ file: ProfileFile) throws {
+        try FileManager.default.createDirectory(at: Paths.support, withIntermediateDirectories: true)
+        let data = try encode(file)
+        if let old = try? Data(contentsOf: Paths.profiles), old != data, ProfileBackup.summary(of: old) != nil {
+            backUp(old, minInterval: ProfileBackup.autoInterval)
+        }
+        try data.write(to: Paths.profiles, options: .atomic)
+    }
+
+    /// Backs up the profiles file as it is on disk now.
+    @discardableResult
+    static func backUpCurrent(reason: String? = nil) -> URL? {
+        guard let data = try? Data(contentsOf: Paths.profiles), ProfileBackup.summary(of: data) != nil else { return nil }
+        return backUp(data, reason: reason)
+    }
+
+    @discardableResult
+    private static func backUp(_ data: Data, reason: String? = nil, minInterval: TimeInterval = 0) -> URL? {
+        do { return try ProfileBackup.save(data, in: Paths.backups, reason: reason, minInterval: minInterval) }
+        catch { NSLog("Video Tags Panel: profile backup failed: \(error.localizedDescription)"); return nil }
     }
 }
 
@@ -237,6 +272,111 @@ enum NamePrompt {
         alert.addButton(withTitle: button).hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+/// Export, Import and Restore from Backup, shared by the ⋯ menu and the
+/// menu-bar Profile menu. Every file is one you pick in an Open or Save panel,
+/// so this works in the App Sandbox too.
+@MainActor
+enum ProfileTransfer {
+    static func export(_ model: PanelModel) {
+        let data: Data
+        do { data = try model.profilesData() } catch { model.flash("Could not export: \(error.localizedDescription)"); return }
+        NSApp.activate()
+        let save = NSSavePanel()
+        save.title = "Export Profiles"
+        save.message = "Saves every profile, its tags in order, and each tag's move folder. Keep a copy somewhere safe, such as another drive."
+        save.nameFieldStringValue = ProfileBackup.exportName()
+        save.allowedContentTypes = [.json]
+        save.canCreateDirectories = true
+        save.directoryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        guard save.runModal() == .OK, let url = save.url else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+            model.flash("Exported \(ProfileBackup.summary(of: data)?.line ?? "profiles") to \(url.lastPathComponent)")
+        } catch {
+            model.flash("Could not export: \(error.localizedDescription)")
+        }
+    }
+
+    static func importFile(_ model: PanelModel) {
+        guard let url = choose(title: "Import Profiles", prompt: "Import",
+                               message: "Choose a profiles file you exported, or a backup.", folder: nil) else { return }
+        apply(url, to: model, restoring: false)
+    }
+
+    static func restore(_ model: PanelModel) {
+        ProfileStore.backUpCurrent()   // so the folder exists and holds today's profiles
+        guard let url = choose(title: "Restore from Backup", prompt: "Restore",
+                               message: "Backups are named by date and time. The newest is at the bottom.",
+                               folder: Paths.backups) else { return }
+        apply(url, to: model, restoring: true)
+    }
+
+    static func showBackups() {
+        ProfileStore.backUpCurrent()
+        if let newest = ProfileBackup.list(in: Paths.backups).first {
+            NSWorkspace.shared.activateFileViewerSelecting([newest.url])
+        } else {
+            NSWorkspace.shared.open(Paths.backups)
+        }
+    }
+
+    private static func choose(title: String, prompt: String, message: String, folder: URL?) -> URL? {
+        NSApp.activate()
+        let open = NSOpenPanel()
+        open.title = title
+        open.prompt = prompt
+        open.message = message
+        open.allowedContentTypes = [.json]
+        open.canChooseDirectories = false
+        open.allowsMultipleSelection = false
+        open.directoryURL = folder ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        guard open.runModal() == .OK else { return nil }
+        return open.url
+    }
+
+    /// Shows what the file holds and what would change, then applies it.
+    private static func apply(_ url: URL, to model: PanelModel, restoring: Bool) {
+        guard let data = try? Data(contentsOf: url), let file = ProfileStore.decode(data),
+              let incoming = (try? ProfileStore.encode(file)).flatMap(ProfileBackup.summary(of:)) else {
+            NSApp.activate()
+            let alert = NSAlert()
+            alert.messageText = "That isn't a Video Tags profiles file"
+            alert.informativeText = "\(url.lastPathComponent) has no profiles in it. Nothing changed."
+            alert.runModal()
+            return
+        }
+        guard let current = (try? model.profilesData()).flatMap(ProfileBackup.summary(of:)) else { return }
+        let diff = ProfileBackup.diff(from: current, to: incoming)
+        let when = ProfileBackup.parse(url.lastPathComponent).map {
+            " from " + $0.date.formatted(date: .abbreviated, time: .shortened)
+        } ?? ""
+
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = restoring ? "Restore this backup\(when)?" : "Import \(url.lastPathComponent)?"
+        alert.informativeText = """
+            It has \(incoming.line).
+
+            Compared with your profiles now:
+            \(diff.lines.joined(separator: "\n"))
+
+            Your current profiles are backed up first, so you can go back with Restore from Backup. Files you already tagged are not changed.
+            """
+        alert.addButton(withTitle: restoring ? "Restore" : "Replace All")
+        let canAdd = !restoring && !diff.added.isEmpty
+        if canAdd { alert.addButton(withTitle: "Add New Profiles Only") }
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            model.replaceProfiles(with: file, reason: restoring ? "before restore" : "before import")
+        case .alertSecondButtonReturn where canAdd:
+            model.addMissingProfiles(from: file)
+        default:
+            break
+        }
     }
 }
 
@@ -831,14 +971,23 @@ final class PanelModel: ObservableObject {
         if let file = ProfileStore.load() {
             profiles = file.profiles
             activeProfile = file.active
+            ProfileStore.backUpCurrent()   // the profiles as they were at launch
             // The palette file is the truth for the active profile: the Lua
             // extension may have added tags while the panel was closed.
             syncActiveProfile()
         } else {
+            // A profiles file that can't be read is kept, never just replaced.
+            let unreadable = try? Data(contentsOf: Paths.profiles)
+            if let unreadable {
+                _ = try? ProfileBackup.save(unreadable, in: Paths.backups, reason: "unreadable")
+            }
             // First run with profiles: today's palette becomes the default profile.
             profiles = [TagProfile(name: ProfileStore.defaultName, tags: custom)]
             activeProfile = ProfileStore.defaultName
             saveProfiles()
+            if unreadable != nil, !ProfileBackup.list(in: Paths.backups).isEmpty {
+                flash("Your profiles file couldn't be read. Use Restore from Backup to get them back.")
+            }
         }
         web = VLCPrefs.current()
         speedStatus = web == nil ? .off : .connecting
@@ -1412,7 +1561,52 @@ final class PanelModel: ObservableObject {
         flash("Deleted the \(name) profile")
     }
 
-    private func flash(_ text: String) {
+    // MARK: Backup, export and import
+
+    /// The profiles as they are now, with the palette folded in.
+    func profilesData() throws -> Data {
+        syncActiveProfile()
+        return try ProfileStore.encode(ProfileFile(active: activeProfile, profiles: profiles))
+    }
+
+    /// Replaces every profile with `file` (an import or a backup). The current
+    /// profiles are backed up first; if that backup fails, nothing changes.
+    @discardableResult
+    func replaceProfiles(with file: ProfileFile, reason: String) -> Bool {
+        guard safetyBackup(reason: reason) else { return false }
+        profiles = file.profiles
+        activeProfile = file.active
+        custom = profiles.first { $0.name == activeProfile }?.tags ?? []
+        do { try store.save(custom) } catch { flash("Could not save palette: \(error.localizedDescription)") }
+        saveProfiles()
+        refreshTags()
+        flash("Profiles replaced. Your old ones are in Restore from Backup.")
+        return true
+    }
+
+    /// Adds the profiles from `file` whose names you don't have yet. Returns how many.
+    @discardableResult
+    func addMissingProfiles(from file: ProfileFile) -> Int {
+        let new = file.profiles.filter { !profiles.map(\.name).containsIgnoringCase($0.name) }
+        guard !new.isEmpty else { flash("You already have every profile in that file"); return 0 }
+        guard safetyBackup(reason: "before import") else { return 0 }
+        profiles.append(contentsOf: new)
+        saveProfiles()
+        flash("Added \(new.map(\.name).joined(separator: ", "))")
+        return new.count
+    }
+
+    private func safetyBackup(reason: String) -> Bool {
+        do {
+            _ = try ProfileBackup.save(try profilesData(), in: Paths.backups, reason: reason)
+            return true
+        } catch {
+            flash("Could not back up your profiles first, so nothing changed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func flash(_ text: String) {
         message = text
         messageTask?.cancel()
         messageTask = Task { @MainActor [weak self] in
@@ -1801,6 +1995,11 @@ struct PanelView: View {
             Menu {
                 Button("New Profile…") { newProfile() }
                 Button("Rename “\(model.activeProfile)”…") { renameProfile() }
+                Divider()
+                Button("Export Profiles…") { ProfileTransfer.export(model) }
+                Button("Import Profiles…") { ProfileTransfer.importFile(model) }
+                Button("Restore from Backup…") { ProfileTransfer.restore(model) }
+                Button("Show Backups in Finder") { ProfileTransfer.showBackups() }
                 Divider()
                 Button("Delete “\(model.activeProfile)”…", role: .destructive) { deleteProfile() }
                     .disabled(model.profiles.count < 2)
@@ -2454,6 +2653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationWillTerminate(_ notification: Notification) {
         model.saveCommentBeforeQuit()
+        ProfileStore.backUpCurrent()
         HotKeys.shared.unregisterAll()
     }
 
@@ -2660,7 +2860,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.addItem(next)
         menu.addItem(withTitle: "New Profile…", action: #selector(newProfile), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Rename “\(model.activeProfile)”…", action: #selector(renameProfile), keyEquivalent: "").target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Export Profiles…", action: #selector(exportProfiles), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Import Profiles…", action: #selector(importProfiles), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Restore from Backup…", action: #selector(restoreProfiles), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Show Backups in Finder", action: #selector(showBackups), keyEquivalent: "").target = self
     }
+
+    @objc private func exportProfiles() { ProfileTransfer.export(model) }
+    @objc private func importProfiles() { ProfileTransfer.importFile(model) }
+    @objc private func restoreProfiles() { ProfileTransfer.restore(model) }
+    @objc private func showBackups() { ProfileTransfer.showBackups() }
 
     @objc private func chooseProfile(_ sender: NSMenuItem) {
         guard model.profiles.indices.contains(sender.tag) else { return }
