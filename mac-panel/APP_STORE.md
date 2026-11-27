@@ -18,6 +18,8 @@ Tested on macOS 27 with a sandboxed probe signed with these exact entitlements.
 | Reading and removing comments stored inside a file (ID3, MP4, WAV) | Same as tagging: needs write access to the file's folder | Same as tagging | Low |
 | Drag-to-seek progress bar (AppleScript `set current time`) | Works | Same VLC Apple-events exception as play/pause | Same as the VLC row |
 | Shared tag palette with the Lua extension, and the one-time speed setup that edits `vlcrc` | Works | `temporary-exception.files.home-relative-path.read-write` for VLC's two folders | **High.** Could be replaced by asking the user to pick the folder once. |
+| Profile backups (automatic, in `org.videolan.vlc/Video Tags Backups`) | Works | Same home-relative exception as the palette | Moves with the palette: if the palette leaves VLC's folder, keep backups in the app container instead |
+| Export and Import profiles | Works | `files.user-selected.read-write` (Save and Open panels) | Low |
 | Speed and seek over VLC's web interface on 127.0.0.1 | Works | `network.client` | Low |
 | Global hotkeys (⌃⌥…) | Works | none (Carbon hot keys are allowed) | Low |
 
